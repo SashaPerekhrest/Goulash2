@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Compile Include="..\Api\Auth\AdminPasswordVerifier.cs" Link="Production\AdminPasswordVerifier.cs" />
+    <Compile Include="..\Api\Auth\AdminSessionStore.cs" Link="Production\AdminSessionStore.cs" />
+    <Compile Include="..\Api\Providers\AiApiKeyProtector.cs" Link="Production\AiApiKeyProtector.cs" />
+    <Compile Include="..\Api\Providers\AiProviderRegistry.cs" Link="Production\AiProviderRegistry.cs" />
+    <Compile Include="..\Api\Providers\AiSettingsKeyPolicy.cs" Link="Production\AiSettingsKeyPolicy.cs" />
+    <Compile Include="..\Application\IAiProviderAdapter.cs" Link="Production\IAiProviderAdapter.cs" />
+    <Compile Include="..\Domain\AiProviderSetting.cs" Link="Production\AiProviderSetting.cs" />
+  </ItemGroup>
+</Project>

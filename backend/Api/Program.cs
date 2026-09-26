@@ -1,15 +1,91 @@
 using Goulash.Api.Errors;
+using Goulash.Api.Auth;
+using Goulash.Api.Providers;
+using Goulash.Application;
 using Goulash.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+var adminPassword = builder.Configuration["Admin:InitialPassword"];
+if (string.IsNullOrWhiteSpace(adminPassword) || adminPassword.Length < 12)
+    throw new InvalidOperationException("Admin:InitialPassword must be configured with at least 12 characters.");
+
+var keyProtector = new AiApiKeyProtector(builder.Configuration["Ai:EncryptionKey"]);
+
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 
 builder.Services.AddOpenApi("v1");
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-Token";
+    options.Cookie.Name = "goulash.csrf";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? CookieSecurePolicy.SameAsRequest
+        : CookieSecurePolicy.Always;
+    options.Cookie.IsEssential = true;
+});
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "goulash.session";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
+        options.Cookie.IsEssential = true;
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = false;
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return Task.CompletedTask;
+        };
+        options.Events.OnValidatePrincipal = async context =>
+        {
+            var sessions = context.HttpContext.RequestServices.GetRequiredService<AdminSessionStore>();
+            if (context.Principal is null || !sessions.IsActive(context.Principal))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            }
+        };
+    });
+builder.Services.AddAuthorization();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<AdminSessionStore>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("admin-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(15),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+});
+builder.Services.AddSingleton(new AdminPasswordVerifier(adminPassword));
+builder.Services.AddSingleton(keyProtector);
+builder.Services.AddSingleton<IAiProviderRegistry, AiProviderRegistry>();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
@@ -44,9 +120,17 @@ app.UseStatusCodePages(async statusCodeContext =>
     await ProblemResponses.WriteAsync(context, status, title, code);
 });
 
+app.UseRouting();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseMiddleware<CsrfProtectionMiddleware>();
+
 app.MapOpenApi("/openapi/{documentName}.json");
 
-app.MapGet("/api/v1/health/ready", ReadyAsync)
+var api = app.MapGroup("/api/v1");
+
+api.MapGet("/health/ready", ReadyAsync)
     .WithName("GetReadiness")
     .WithTags("Health")
     .WithSummary("Проверяет готовность API и доступность PostgreSQL")
@@ -54,7 +138,80 @@ app.MapGet("/api/v1/health/ready", ReadyAsync)
     .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
     .AllowAnonymous();
 
+api.MapGet("/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =>
+    {
+        var tokens = antiforgery.GetAndStoreTokens(context);
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(new { csrfToken = tokens.RequestToken });
+    })
+    .AllowAnonymous()
+    .WithName("GetCsrfToken")
+    .WithTags("Authentication")
+    .Produces(StatusCodes.Status200OK);
+
+var routes = api.MapGroup("").RequireAuthorization();
+routes.MapPost("/auth/login", LoginAsync)
+    .AllowAnonymous()
+    .RequireRateLimiting("admin-login")
+    .WithName("Login")
+    .WithTags("Authentication")
+    .Produces(StatusCodes.Status204NoContent)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .ProducesProblem(StatusCodes.Status429TooManyRequests);
+routes.MapPost("/auth/logout", LogoutAsync)
+    .WithName("Logout")
+    .WithTags("Authentication")
+    .Produces(StatusCodes.Status204NoContent)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .ProducesProblem(StatusCodes.Status403Forbidden);
+routes.MapGet("/auth/session", (HttpContext context) =>
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(new { authenticated = true });
+    })
+    .WithName("GetSession")
+    .WithTags("Authentication")
+    .Produces(StatusCodes.Status200OK)
+    .ProducesProblem(StatusCodes.Status401Unauthorized);
+
+routes.MapAiSettingsEndpoints();
+
 app.Run();
+
+static async Task<IResult> LoginAsync(
+    LoginRequest request,
+    HttpContext context,
+    AdminPasswordVerifier passwordVerifier,
+    AdminSessionStore sessions)
+{
+    if (request.Password is null || request.Password.Length > 1024 || !passwordVerifier.IsValid(request.Password))
+        return ProblemResponses.Create(context, StatusCodes.Status401Unauthorized,
+            "Неверный пароль администратора", "INVALID_CREDENTIALS");
+
+    var identity = sessions.CreateIdentity();
+    var principal = new System.Security.Claims.ClaimsPrincipal(identity);
+    try
+    {
+        await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
+            principal,
+            new AuthenticationProperties { IsPersistent = false, AllowRefresh = false });
+    }
+    catch
+    {
+        sessions.Revoke(principal);
+        throw;
+    }
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.NoContent();
+}
+
+static async Task<IResult> LogoutAsync(HttpContext context, AdminSessionStore sessions)
+{
+    sessions.Revoke(context.User);
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.NoContent();
+}
 
 static async Task<IResult> ReadyAsync(ApplicationDbContext db, HttpContext context, CancellationToken cancellationToken)
 {

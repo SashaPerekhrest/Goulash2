@@ -21,4 +21,20 @@ public sealed class AiProviderSetting
     public string Model { get; private set; } = string.Empty;
     public byte[]? EncryptedApiKey { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
+
+    public void Update(string providerId, string model, byte[]? encryptedApiKey, DateTimeOffset updatedAt)
+    {
+        if (updatedAt.Offset != TimeSpan.Zero) throw new ArgumentException("Dates must use UTC.", nameof(updatedAt));
+        ProviderId = providerId;
+        Model = model;
+        EncryptedApiKey = encryptedApiKey;
+        UpdatedAt = updatedAt;
+    }
+
+    public void RemoveApiKey(DateTimeOffset updatedAt)
+    {
+        if (updatedAt.Offset != TimeSpan.Zero) throw new ArgumentException("Dates must use UTC.", nameof(updatedAt));
+        EncryptedApiKey = null;
+        UpdatedAt = updatedAt;
+    }
 }
