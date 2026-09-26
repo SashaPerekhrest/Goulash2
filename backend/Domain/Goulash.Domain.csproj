@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Goulash.Domain</RootNamespace>
+    <AssemblyName>Goulash.Domain</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,28 @@
+# .NET
+**/bin/
+**/obj/
+.packages/
+.local-profile/
+.dotnet-home/
+.nuget-http-cache/
+.docker-config/
+*.user
+*.suo
+.vs/
+
+# Node
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# Environment and local state
+.env
+.env.*
+!.env.example
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,12 @@
+.git
+.dockerignore
+.env
+.local-profile
+.dotnet-home
+.docker-config
+.packages
+.nuget-http-cache
+**/bin
+**/obj
+**/node_modules
+frontend/dist

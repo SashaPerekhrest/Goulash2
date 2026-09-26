@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Goulash.Application</RootNamespace>
+    <AssemblyName>Goulash.Application</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Domain\Goulash.Domain.csproj" />
+  </ItemGroup>
+</Project>
