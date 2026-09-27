@@ -31,14 +31,12 @@ type DiscoveryForm = {
 
 type SearchSnapshot = {
   request: DiscoverySearchRequest
-  signature: string
   summary: string[]
   hasSubstantiveConditions: boolean
   errors: Record<string, string>
 }
 
-type SearchIntent = SearchSnapshot & { revision: number; ready: boolean; autoSchedule: boolean }
-type ActiveSearch = { controller: AbortController; revision: number; signature: string }
+type ActiveSearch = { controller: AbortController }
 type DiscoveryFailure = { title: string; message: string; code: string }
 
 const initialForm: DiscoveryForm = {
@@ -49,13 +47,13 @@ const initialForm: DiscoveryForm = {
   product: '',
   priceMin: '',
   priceMax: '',
-  currency: 'RUB',
-  priceUnit: 'kg',
+  currency: '',
+  priceUnit: '',
   includeApproximatePrices: false,
   maxDeliveryDays: '',
   minMinimumOrder: '',
   maxMinimumOrder: '',
-  minimumOrderUnit: 'kg',
+  minimumOrderUnit: '',
 }
 
 export function DiscoverPage() {
@@ -65,8 +63,9 @@ export function DiscoverPage() {
   const [settings, setSettings] = useState<AiSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsError, setSettingsError] = useState(false)
-  const [intentRevision, setIntentRevision] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [filtersExpanded, setFiltersExpanded] = useState(false)
+  const [searchCancelled, setSearchCancelled] = useState(false)
   const [failure, setFailure] = useState<DiscoveryFailure | null>(null)
   const [response, setResponse] = useState<DiscoverySearchResponse | null>(null)
   const [resultSnapshot, setResultSnapshot] = useState<SearchSnapshot | null>(null)
@@ -74,19 +73,13 @@ export function DiscoverPage() {
   const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set())
   const [favoriteError, setFavoriteError] = useState(false)
 
-  const intentRef = useRef<SearchIntent | null>(null)
   const activeSearchRef = useRef<ActiveSearch | null>(null)
-  const revisionRef = useRef(0)
   const mountedRef = useRef(true)
   const canSearchRef = useRef(false)
   const latestSnapshot = makeSearchSnapshot(form)
   const currentErrors = latestSnapshot.errors
   const canSearch = settings?.hasApiKey === true
   canSearchRef.current = canSearch
-
-  if (intentRef.current === null) {
-    intentRef.current = { ...makeSearchSnapshot(initialForm), revision: 0, ready: false, autoSchedule: false }
-  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -115,94 +108,61 @@ export function DiscoverPage() {
     }
   }, [])
 
-  useEffect(() => {
-    const intent = intentRef.current
-    if (!intent || !intent.autoSchedule || settingsLoading || settingsError || !canSearch ||
-      intent.signature !== latestSnapshot.signature ||
-      !intent.hasSubstantiveConditions || Object.keys(intent.errors).length > 0) return
-
-    const scheduledRevision = intent.revision
-    const timer = window.setTimeout(() => {
-      const latestIntent = intentRef.current
-      if (!latestIntent || latestIntent.revision !== scheduledRevision) return
-      latestIntent.ready = true
-      startSearch(scheduledRevision)
-    }, 700)
-
-    return () => window.clearTimeout(timer)
-  }, [intentRevision, latestSnapshot.signature, settingsError, settingsLoading, canSearch])
-
   function changeField<Field extends keyof DiscoveryForm>(field: Field, value: DiscoveryForm[Field]) {
     const previous = formRef.current
     if (previous[field] === value) return
     const next = { ...previous, [field]: value }
     formRef.current = next
     setForm(next)
-
-    const nextSnapshot = makeSearchSnapshot(next)
-    const currentIntent = intentRef.current
-    if (!currentIntent || currentIntent.signature === nextSnapshot.signature) return
-
-    const revision = ++revisionRef.current
-    intentRef.current = { ...nextSnapshot, revision, ready: false, autoSchedule: true }
-    setIntentRevision(revision)
-    activeSearchRef.current?.controller.abort()
   }
 
-  function startSearch(revision: number) {
-    const intent = intentRef.current
-    if (!intent || intent.revision !== revision || !intent.ready || activeSearchRef.current ||
-      !canSearchRef.current || !intent.hasSubstantiveConditions || Object.keys(intent.errors).length > 0) return
-
-    intent.ready = false
-    intent.autoSchedule = false
+  function startSearch(snapshot: SearchSnapshot) {
+    if (activeSearchRef.current || !canSearchRef.current || !snapshot.hasSubstantiveConditions ||
+      Object.keys(snapshot.errors).length > 0) return
     const controller = new AbortController()
-    const activeSearch: ActiveSearch = { controller, revision, signature: intent.signature }
+    const activeSearch: ActiveSearch = { controller }
     activeSearchRef.current = activeSearch
     setLoading(true)
     setFailure(null)
     setFavoriteError(false)
-    setLastRunSnapshot(intent)
+    setSearchCancelled(false)
+    setLastRunSnapshot(snapshot)
 
-    void discoverSuppliers(intent.request, controller.signal)
+    void discoverSuppliers(snapshot.request, controller.signal)
       .then((result) => {
-        if (!mountedRef.current || controller.signal.aborted || intentRef.current?.revision !== revision) return
+        if (!mountedRef.current || controller.signal.aborted) return
         setResponse(result)
-        setResultSnapshot(intent)
+        setResultSnapshot(snapshot)
       })
       .catch((cause: unknown) => {
-        if (!mountedRef.current || controller.signal.aborted || intentRef.current?.revision !== revision) return
+        if (!mountedRef.current || controller.signal.aborted) return
         setFailure(describeDiscoveryFailure(cause))
       })
       .finally(() => {
         if (activeSearchRef.current !== activeSearch) return
         activeSearchRef.current = null
         if (mountedRef.current) setLoading(false)
-
-        const latestIntent = intentRef.current
-        if (latestIntent?.ready) startSearch(latestIntent.revision)
       })
   }
 
   function handleImmediateSearch() {
     const snapshot = makeSearchSnapshot(formRef.current)
     if (!snapshot.hasSubstantiveConditions || Object.keys(snapshot.errors).length > 0 || !canSearchRef.current) return
-    if (activeSearchRef.current && intentRef.current?.signature === snapshot.signature) return
-
-    const revision = ++revisionRef.current
-    intentRef.current = { ...snapshot, revision, ready: true, autoSchedule: false }
-    setIntentRevision(revision)
-    activeSearchRef.current?.controller.abort()
-    startSearch(revision)
+    startSearch(snapshot)
   }
 
   function repeatLastSearch() {
     if (!lastRunSnapshot || !canSearchRef.current) return
-    const revision = ++revisionRef.current
-    intentRef.current = { ...lastRunSnapshot, revision, ready: true, autoSchedule: false }
-    setIntentRevision(revision)
-    activeSearchRef.current?.controller.abort()
-    startSearch(revision)
+    startSearch(lastRunSnapshot)
+  }
+
+  function cancelSearch() {
+    const activeSearch = activeSearchRef.current
+    if (!activeSearch) return
+    activeSearchRef.current = null
+    activeSearch.controller.abort()
+    setLoading(false)
+    setSearchCancelled(true)
   }
 
   async function toggleFavorite(id: string, currentValue: boolean) {
@@ -232,9 +192,8 @@ export function DiscoverPage() {
 
   if (settingsLoading) return <PageLoading label="Проверяем настройки поиска…" />
 
-  const hasCurrentAttempt = lastRunSnapshot?.signature === latestSnapshot.signature
   const canSubmitCurrent = canSearch && latestSnapshot.hasSubstantiveConditions &&
-    Object.keys(currentErrors).length === 0 && !hasCurrentAttempt
+    Object.keys(currentErrors).length === 0 && !loading
 
   return (
     <section className="page-content discover-page">
@@ -267,7 +226,8 @@ export function DiscoverPage() {
           event.preventDefault()
           handleImmediateSearch()
         }}>
-          <div className="discover-query-row">
+          <div className="discover-query-controls">
+            <div className="discover-query-row">
             <FormField id="discovery-query" label="Что нужно найти?" hint="Опишите товар, тип поставщика или условия поиска.">
               <input
                 id="discovery-query"
@@ -282,8 +242,15 @@ export function DiscoverPage() {
               />
               {currentErrors.query && <FieldError id="discovery-query-error">{currentErrors.query}</FieldError>}
             </FormField>
+            </div>
+            <button className="button secondary discover-filter-toggle" type="button"
+              aria-expanded={filtersExpanded} aria-controls="discovery-filters"
+              onClick={() => setFiltersExpanded((expanded) => !expanded)}>
+              Фильтры <span aria-hidden="true">{filtersExpanded ? '−' : '+'}</span>
+            </button>
           </div>
 
+          {filtersExpanded && <div className="discover-filter-panel" id="discovery-filters">
           <div className="discover-filter-grid">
             <FormField id="discovery-city" label="Город">
               <input id="discovery-city" className="text-input" value={form.city} maxLength={160} placeholder="Екатеринбург"
@@ -369,6 +336,7 @@ export function DiscoverPage() {
               </fieldset>
             </div>
           </div>
+          </div>}
 
           {latestSnapshot.hasSubstantiveConditions && Object.keys(currentErrors).length > 0 && (
             <p className="discover-validation-summary" role="alert">Исправьте отмеченные значения. Поиск не отправлен.</p>
@@ -379,14 +347,15 @@ export function DiscoverPage() {
 
           <div className="discover-form-actions">
             <button className="button primary" type="submit" disabled={!canSubmitCurrent}>
-              {loading && activeSearchRef.current?.signature === latestSnapshot.signature ? 'Поиск выполняется…' : 'Найти'}
+              Найти
             </button>
-            {lastRunSnapshot && !loading && (
-              <button className="button secondary" type="button" onClick={repeatLastSearch} disabled={!canSearch}>
-                Повторить последний поиск
+            {loading && (
+              <button className="button secondary" type="button" onClick={cancelSearch}>
+                Отмена
               </button>
             )}
-            {loading && <LoadingIndicator label="Можно изменить условия — запустится поиск по последним." />}
+            {loading && <LoadingIndicator label="Ищем поставщиков…" />}
+            {searchCancelled && <span className="search-cancelled" role="status">Поиск отменён.</span>}
           </div>
         </form>
       </Card>
@@ -590,7 +559,7 @@ function makeSearchSnapshot(form: DiscoveryForm): SearchSnapshot {
     summary.push(`Минимальный заказ: ${range} ${form.minimumOrderUnit.trim()}`)
   }
 
-  return { request, signature: JSON.stringify(request), summary, hasSubstantiveConditions, errors }
+  return { request, summary, hasSubstantiveConditions, errors }
 }
 
 function validateForm(form: DiscoveryForm): Record<string, string> {

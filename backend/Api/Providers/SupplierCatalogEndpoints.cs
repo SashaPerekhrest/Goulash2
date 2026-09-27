@@ -137,7 +137,8 @@ public static class SupplierCatalogEndpoints
             {
                 var ids = await orderedIds.Skip(offset).Take(batchSize).ToArrayAsync(cancellationToken);
                 if (ids.Length == 0) break;
-                var suppliers = await LoadCardSuppliersAsync(db, ids, cancellationToken);
+                var suppliers = await LoadCardSuppliersAsync(db, ids, cancellationToken,
+                    includeSearchEvidence: filters.Query is not null);
                 foreach (var id in ids)
                 {
                     var supplier = suppliers[id];
@@ -155,16 +156,23 @@ public static class SupplierCatalogEndpoints
     }
 
     private static async Task<Dictionary<Guid, Supplier>> LoadCardSuppliersAsync(ApplicationDbContext db,
-        Guid[] ids, CancellationToken cancellationToken)
+        Guid[] ids, CancellationToken cancellationToken, bool includeSearchEvidence = false)
     {
         if (ids.Length == 0) return new Dictionary<Guid, Supplier>();
-        return await db.Suppliers.AsNoTracking().AsSplitQuery()
+        IQueryable<Supplier> query = db.Suppliers.AsNoTracking().AsSplitQuery()
             .Where(supplier => ids.Contains(supplier.Id))
             .Include(supplier => supplier.Facts)
             .Include(supplier => supplier.Products)
                 .ThenInclude(product => product.Prices)
-                    .ThenInclude(price => price.Fact)
-            .ToDictionaryAsync(supplier => supplier.Id, cancellationToken);
+                    .ThenInclude(price => price.Fact);
+        if (includeSearchEvidence)
+        {
+            query = query.Include(supplier => supplier.Sources)
+                .Include(supplier => supplier.Facts)
+                    .ThenInclude(fact => fact.FactSources)
+                        .ThenInclude(link => link.Source);
+        }
+        return await query.ToDictionaryAsync(supplier => supplier.Id, cancellationToken);
     }
 
     private static async Task<IResult> GetAsync(Guid id, HttpContext context, ApplicationDbContext db,

@@ -55,7 +55,7 @@ internal static class SupplierCatalogMapper
     {
         var currentFacts = supplier.Facts.Where(fact => fact.IsCurrent).ToArray();
         if (filters.FavoriteOnly && !supplier.IsFavorite) return false;
-        if (!MatchesTerm(filters.Query, new[] { supplier.Name }.Concat(supplier.Products.Select(product => product.Name))))
+        if (!MatchesAllContent(filters.Query, supplier))
             return false;
         if (!MatchesFactTerm(filters.City, currentFacts.Where(fact => fact.FieldKey is "city" or "service_region"), supplier.City))
             return false;
@@ -89,6 +89,39 @@ internal static class SupplierCatalogMapper
             return false;
 
         return true;
+    }
+
+    private static bool MatchesAllContent(string? query, Supplier supplier)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return true;
+        var values = new List<string?>
+        {
+            supplier.Name, supplier.NormalizedName, supplier.OfficialSiteUrl, supplier.OfficialDomain,
+            supplier.City, supplier.Region, supplier.Note
+        };
+        values.AddRange(supplier.Products.Select(product => product.Name));
+        foreach (var fact in supplier.Facts)
+        {
+            values.Add(fact.FieldKey);
+            values.Add(fact.ItemKey);
+            values.AddRange(FlattenStrings(fact.ValueJson));
+            values.AddRange(FlattenStrings(fact.NormalizedValueJson));
+            foreach (var evidence in fact.FactSources.Select(link => link.Source))
+            {
+                values.Add(evidence.Title);
+                values.Add(evidence.Excerpt);
+                values.Add(evidence.Url);
+                values.Add(evidence.Host);
+            }
+        }
+        foreach (var source in supplier.Sources)
+        {
+            values.Add(source.Title);
+            values.Add(source.Excerpt);
+            values.Add(source.Url);
+            values.Add(source.Host);
+        }
+        return MatchesTerm(query, values.OfType<string>());
     }
 
     public static SupplierCatalogCard ToCard(Supplier supplier)
@@ -407,6 +440,9 @@ internal static class SupplierCatalogMapper
             {
                 case JsonValueKind.String:
                     if (!string.IsNullOrWhiteSpace(element.GetString())) yield return element.GetString()!;
+                    break;
+                case JsonValueKind.Number:
+                    yield return element.GetRawText();
                     break;
                 case JsonValueKind.Array:
                     foreach (var item in element.EnumerateArray())

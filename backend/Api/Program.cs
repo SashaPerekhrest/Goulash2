@@ -117,6 +117,7 @@ await ApplyMigrationsAsync(app);
 
 app.UseExceptionHandler(exceptionHandler => exceptionHandler.Run(async context =>
 {
+    if (context.RequestAborted.IsCancellationRequested) return;
     var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Goulash.Api.Errors");
     logger.LogError("Unhandled API request failed. TraceId={TraceId}", context.TraceIdentifier);
 
