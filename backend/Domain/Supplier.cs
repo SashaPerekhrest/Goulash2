@@ -65,6 +65,13 @@ public sealed class Supplier
         Region = NormalizeOptional(region);
     }
 
+    public void SetNormalizedName(string normalizedName)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedName))
+            throw new ArgumentException("A normalized supplier name is required.", nameof(normalizedName));
+        NormalizedName = normalizedName;
+    }
+
     public void MarkDiscovered(DateTimeOffset at)
     {
         EnsureUtc(at, nameof(at));

@@ -105,6 +105,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         entity.Property(item => item.FieldKey).HasColumnName("field_key").HasMaxLength(80).IsRequired();
         entity.Property(item => item.ItemKey).HasColumnName("item_key").HasMaxLength(200).IsRequired();
         entity.Property(item => item.ValueJson).HasColumnName("value_json").HasColumnType("jsonb").IsRequired();
+        entity.Property(item => item.NormalizedValueJson).HasColumnName("normalized_value_json").HasColumnType("jsonb").IsRequired();
         entity.Property(item => item.Status).HasColumnName("verification_status").HasConversion(StatusConverter).HasMaxLength(16).IsRequired();
         entity.Property(item => item.ObservedAt).HasColumnName("observed_at").HasColumnType("timestamp with time zone");
         entity.Property(item => item.IsCurrent).HasColumnName("is_current").HasDefaultValue(true);
@@ -139,7 +140,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         source.HasOne(item => item.Supplier).WithMany(item => item.Sources)
             .HasForeignKey(item => item.SupplierId).OnDelete(DeleteBehavior.Cascade)
             .HasConstraintName("fk_supplier_sources_supplier");
-        source.HasIndex(item => new { item.SupplierId, item.Url }).IsUnique().HasDatabaseName("ux_supplier_sources_supplier_url");
+        source.HasIndex(item => new { item.SupplierId, item.Url }).HasDatabaseName("ix_supplier_sources_supplier_url");
 
         var link = modelBuilder.Entity<FactSource>();
         link.ToTable("fact_sources");

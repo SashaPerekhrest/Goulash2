@@ -98,6 +98,7 @@ builder.Services.AddSingleton<ISupplierDiscoveryAdapter>(sp => sp.GetRequiredSer
 builder.Services.AddSingleton<IAiProviderRegistry, AiProviderRegistry>();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISupplierDiscoveryProvider, ConfiguredSupplierDiscoveryProvider>();
+builder.Services.AddScoped<DiscoveryPersistence>();
 
 var app = builder.Build();
 
@@ -186,6 +187,7 @@ routes.MapGet("/auth/session", (HttpContext context) =>
     .ProducesProblem(StatusCodes.Status401Unauthorized);
 
 routes.MapAiSettingsEndpoints();
+routes.MapDiscoveryEndpoints();
 
 app.Run();
 

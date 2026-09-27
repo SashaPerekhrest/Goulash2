@@ -87,8 +87,10 @@ public sealed class PerplexityProviderAdapter(IHttpClientFactory httpClientFacto
             website, delivery_terms, delivery_days, minimum_order, certificate, service_region, product_name,
             product_category, category, product_price, price, image. For a structured price use amountMin, amountMax,
             currency, unit, isApproximate and originalText; for a minimum order use amount and unit. Keep the source
-            wording in originalText and in other values when normalization would lose information. Do not include a
-            supplier if its name has no supporting search result.
+            wording in originalText and in other values when normalization would lose information. Use the same stable
+            itemKey for a product name, its category, and its price; use the product name as itemKey when possible. Match
+            the requested city and region against the supplier's place of business or a source-confirmed delivery area.
+            Do not include a supplier if its name has no supporting search result.
             """;
 
         var payload = new
@@ -147,8 +149,9 @@ public sealed class PerplexityProviderAdapter(IHttpClientFactory httpClientFacto
                     continue;
                 }
 
-                if (candidates.Count < limit)
-                    candidates.Add(candidate!);
+                // The API applies its evidence and search filters before choosing the first five.
+                // Keep all parsed records within the response safety cap for that pass.
+                candidates.Add(candidate!);
                 rejectedFacts += rejectedFactsForRecord;
             }
 

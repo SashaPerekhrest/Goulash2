@@ -98,7 +98,7 @@ public static partial class SupplierFactNormalizer
             : value;
     }
 
-    private static string NormalizeCurrency(string value)
+    public static string NormalizeCurrency(string value)
     {
         var compact = value.Trim().ToLowerInvariant();
         return compact switch
@@ -112,7 +112,7 @@ public static partial class SupplierFactNormalizer
         };
     }
 
-    private static string NormalizeUnit(string value)
+    public static string NormalizeUnit(string value)
     {
         var compact = value.Trim().ToLowerInvariant().Replace(".", string.Empty, StringComparison.Ordinal);
         return compact switch

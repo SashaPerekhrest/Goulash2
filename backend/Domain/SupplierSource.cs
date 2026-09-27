@@ -35,4 +35,12 @@ public sealed class SupplierSource
     public SourceType Type { get; private set; }
     public DateTimeOffset RetrievedAt { get; private set; }
     public ICollection<FactSource> FactSources { get; private set; } = new List<FactSource>();
+
+    public void RefreshObservation(string? title, DateTimeOffset retrievedAt)
+    {
+        if (retrievedAt.Offset != TimeSpan.Zero)
+            throw new ArgumentException("Dates must use UTC.", nameof(retrievedAt));
+        Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        RetrievedAt = retrievedAt;
+    }
 }

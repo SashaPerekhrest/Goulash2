@@ -22,4 +22,13 @@ public sealed class SupplierProduct
     public string? Category { get; private set; }
     public string NormalizedName { get; private set; } = string.Empty;
     public ICollection<SupplierPrice> Prices { get; private set; } = new List<SupplierPrice>();
+
+    public void UpdateDetails(string name, string normalizedName, string? category)
+    {
+        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("A product name is required.", nameof(name));
+        if (string.IsNullOrWhiteSpace(normalizedName)) throw new ArgumentException("A normalized product name is required.", nameof(normalizedName));
+        Name = name.Trim();
+        NormalizedName = normalizedName.Trim();
+        Category = string.IsNullOrWhiteSpace(category) ? null : category.Trim();
+    }
 }
