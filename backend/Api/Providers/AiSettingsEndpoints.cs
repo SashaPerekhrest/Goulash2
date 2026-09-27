@@ -14,7 +14,8 @@ public static class AiSettingsEndpoints
         var settings = routes.MapGroup("/ai").WithTags("AI settings");
 
         settings.MapGet("/providers", (IAiProviderRegistry registry) =>
-                Results.Ok(new { items = registry.WebSearchProviders.Select(provider => new ProviderResponse(provider.Id, provider.DisplayName, true)) }))
+                Results.Ok(new { items = registry.WebSearchProviders.Select(provider =>
+                    new ProviderResponse(provider.Id, provider.DisplayName, true, provider.SupportedModels)) }))
             .WithName("GetAiProviders");
 
         settings.MapGet("/settings", (ApplicationDbContext db, HttpContext context, CancellationToken cancellationToken) =>
@@ -36,6 +37,7 @@ public static class AiSettingsEndpoints
             .WithName("CheckAiSettings")
             .Produces<ProviderCheckResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status502BadGateway)
             .ProducesProblem(StatusCodes.Status504GatewayTimeout);
 
@@ -66,6 +68,8 @@ public static class AiSettingsEndpoints
         var provider = registry.FindWebSearchProvider(request.ProviderId);
         if (provider is null)
             return ProblemResponses.Create(context, StatusCodes.Status400BadRequest, "Неизвестный или неподдерживаемый провайдер", "UNSUPPORTED_PROVIDER");
+        if (!provider.SupportsModel(request.Model))
+            return ProblemResponses.Create(context, StatusCodes.Status400BadRequest, "Модель не поддерживается выбранным провайдером", "UNSUPPORTED_MODEL");
 
         string? apiKey = null;
         if (request.ApiKey.HasValue)
@@ -139,6 +143,10 @@ public static class AiSettingsEndpoints
 
             return Results.Ok(new ProviderCheckResponse(true, true, DateTimeOffset.UtcNow));
         }
+        catch (AiProviderException exception)
+        {
+            return ToProviderProblem(context, exception.Code);
+        }
         catch (TimeoutException)
         {
             return ProblemResponses.Create(context, StatusCodes.Status504GatewayTimeout,
@@ -160,7 +168,22 @@ public static class AiSettingsEndpoints
         : new AiSettingsResponse(setting.ProviderId, setting.Model, setting.EncryptedApiKey is not null,
             setting.EncryptedApiKey is null ? null : "••••••••", setting.UpdatedAt);
 
-    private sealed record ProviderResponse(string Id, string DisplayName, bool SupportsWebSearch);
+    private static IResult ToProviderProblem(HttpContext context, ProviderFailureCode code) => code switch
+    {
+        ProviderFailureCode.NotConfigured => ProblemResponses.Create(context, StatusCodes.Status409Conflict,
+            "Сначала выберите провайдера и сохраните API-ключ", "PROVIDER_NOT_CONFIGURED"),
+        ProviderFailureCode.UnsupportedModel => ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
+            "Модель не поддерживается выбранным провайдером", "UNSUPPORTED_MODEL"),
+        ProviderFailureCode.Timeout => ProblemResponses.Create(context, StatusCodes.Status504GatewayTimeout,
+            "Время проверки провайдера истекло", "PROVIDER_TIMEOUT"),
+        ProviderFailureCode.InvalidResponse => ProblemResponses.Create(context, StatusCodes.Status502BadGateway,
+            "Провайдер вернул некорректный ответ", "PROVIDER_INVALID_RESPONSE"),
+        _ => ProblemResponses.Create(context, StatusCodes.Status502BadGateway,
+            "Не удалось проверить подключение к провайдеру", "PROVIDER_UNAVAILABLE")
+    };
+
+    private sealed record ProviderResponse(string Id, string DisplayName, bool SupportsWebSearch,
+        IReadOnlyCollection<string> Models);
 }
 
 public sealed record UpdateAiSettingsRequest(string? ProviderId, string? Model, JsonElement? ApiKey);

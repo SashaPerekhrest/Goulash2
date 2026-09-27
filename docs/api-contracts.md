@@ -24,7 +24,7 @@
 }
 ```
 
-Коды: `VALIDATION_ERROR`/`UNSUPPORTED_PROVIDER` (`400`), `UNAUTHORIZED`/`INVALID_CREDENTIALS` (`401`), `FORBIDDEN`/`CSRF_INVALID` (`403`), `NOT_FOUND` (`404`), `CONFLICT`/`PROVIDER_NOT_CONFIGURED`/`API_KEY_REQUIRED` (`409`), `PROVIDER_UNAVAILABLE`/`PROVIDER_INVALID_RESPONSE` (`502`), `PROVIDER_TIMEOUT` (`504`), `RATE_LIMITED` (`429`). Поля с секретами и внутренние тексты промптов в ошибках не возвращаются. Вход ограничен пятью попытками за 15 минут на IP.
+Коды: `VALIDATION_ERROR`/`UNSUPPORTED_PROVIDER`/`UNSUPPORTED_MODEL` (`400`), `UNAUTHORIZED`/`INVALID_CREDENTIALS` (`401`), `FORBIDDEN`/`CSRF_INVALID` (`403`), `NOT_FOUND` (`404`), `CONFLICT`/`PROVIDER_NOT_CONFIGURED`/`API_KEY_REQUIRED` (`409`), `PROVIDER_UNAVAILABLE`/`PROVIDER_INVALID_RESPONSE` (`502`), `PROVIDER_TIMEOUT` (`504`), `RATE_LIMITED` (`429`). Поля с секретами и внутренние тексты промптов в ошибках не возвращаются. Вход ограничен пятью попытками за 15 минут на IP.
 
 ## 2. Авторизация и состояние
 
@@ -47,16 +47,19 @@
 ```json
 {
   "items": [
-    { "id": "provider-id", "displayName": "Название провайдера", "supportsWebSearch": true }
+    { "id": "perplexity", "displayName": "Perplexity", "supportsWebSearch": true,
+      "models": ["sonar", "sonar-pro", "sonar-deep-research", "sonar-reasoning-pro"] }
   ]
 }
 ```
 
-`provider-id` — идентификатор реализованного адаптера, не произвольный URL. Перечень доступных моделей может зависеть от провайдера; UI предлагает известные модели и допускает ввод поддерживаемого идентификатора.
+`provider-id` — идентификатор реализованного адаптера, не произвольный URL. `models` содержит точные поддерживаемые идентификаторы; API отклоняет неизвестную модель как `UNSUPPORTED_MODEL`. У Perplexity по умолчанию рекомендуется `sonar-pro`.
 
-Адаптер реализует `Goulash.Application.IAiProviderAdapter`: идентификатор, отображаемое имя, признак веб-поиска и `CheckConnectionAsync(model, apiKey, cancellationToken)`, возвращающий соединение и доступность веб-поиска. В список попадают только зарегистрированные сервером адаптеры с `SupportsWebSearch=true`.
+Подключён Perplexity Sonar API: `POST https://api.perplexity.ai/v1/sonar`, авторизация Bearer API key. Ответ содержит `choices[0].message.content` с JSON поставщиков и отдельный `search_results[]` с `url`, `title`, `snippet` и датами публикации/обновления. В факты попадают только сниппеты из `search_results`, URL которых совпал с источником из JSON; ответ модели сам по себе источником не является. URL-ы должны быть публичными абсолютными HTTP(S)-адресами, а сниппет должен подтверждать значение.
 
-До регистрации первого адаптера в спринте 03 список пуст. `PUT /ai/settings` тогда отклоняет любой `providerId` как `UNSUPPORTED_PROVIDER`; полный сценарий настройки доступен после регистрации адаптера.
+Адаптер реализует `Goulash.Application.IAiProviderAdapter`: идентификатор, отображаемое имя, признак веб-поиска, поддерживаемые модели и `CheckConnectionAsync(model, apiKey, cancellationToken)`, возвращающий соединение и доступность веб-поиска. В список попадают только зарегистрированные сервером адаптеры с `SupportsWebSearch=true`.
+
+`ISupplierDiscoveryProvider.DiscoverAsync(query, filters, limit, cancellationToken)` загружает модель и ключ из сохранённых настроек. Адаптер передаёт структурированные фильтры, жёсткий максимум пять и запрет домысливания; конкретные реализации провайдера не раскрываются клиенту.
 
 ### `GET /ai/settings`
 
@@ -96,7 +99,7 @@
 { "connected": true, "webSearchAvailable": true, "checkedAt": "2026-09-26T10:00:00Z" }
 ```
 
-При ошибке — Problem Details с кодом `PROVIDER_NOT_CONFIGURED`, `PROVIDER_UNAVAILABLE` или `PROVIDER_TIMEOUT`. Ключ в запросе проверки не передаётся. Полный вызов адаптера подготовлен; успешная проверка становится доступна после регистрации реального адаптера с веб-поиском в спринте 03.
+При ошибке — Problem Details с кодом `PROVIDER_NOT_CONFIGURED`, `PROVIDER_UNAVAILABLE`, `PROVIDER_INVALID_RESPONSE` или `PROVIDER_TIMEOUT`. Ключ в запросе проверки не передаётся. Проверка делает минимальный веб-запрос и возвращает успех только когда ответ содержит минимум один URL и сниппет веб-результата. Ошибка не изменяет сохранённые настройки.
 
 ## 4. Поиск новых поставщиков
 

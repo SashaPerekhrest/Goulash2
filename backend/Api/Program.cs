@@ -17,6 +17,11 @@ if (string.IsNullOrWhiteSpace(adminPassword) || adminPassword.Length < 12)
     throw new InvalidOperationException("Admin:InitialPassword must be configured with at least 12 characters.");
 
 var keyProtector = new AiApiKeyProtector(builder.Configuration["Ai:EncryptionKey"]);
+var providerTimeoutSeconds = int.TryParse(builder.Configuration["Ai:ProviderTimeoutSeconds"], out var configuredProviderTimeout)
+    ? configuredProviderTimeout
+    : 45;
+if (providerTimeoutSeconds is < 1 or > 300)
+    throw new InvalidOperationException("Ai:ProviderTimeoutSeconds must be between 1 and 300.");
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -85,8 +90,14 @@ builder.Services.AddRateLimiter(options =>
 });
 builder.Services.AddSingleton(new AdminPasswordVerifier(adminPassword));
 builder.Services.AddSingleton(keyProtector);
+builder.Services.AddHttpClient("Perplexity", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddSingleton(sp => new PerplexityProviderAdapter(
+    sp.GetRequiredService<IHttpClientFactory>(), providerTimeoutSeconds));
+builder.Services.AddSingleton<IAiProviderAdapter>(sp => sp.GetRequiredService<PerplexityProviderAdapter>());
+builder.Services.AddSingleton<ISupplierDiscoveryAdapter>(sp => sp.GetRequiredService<PerplexityProviderAdapter>());
 builder.Services.AddSingleton<IAiProviderRegistry, AiProviderRegistry>();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ISupplierDiscoveryProvider, ConfiguredSupplierDiscoveryProvider>();
 
 var app = builder.Build();
 

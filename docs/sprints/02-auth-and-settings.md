@@ -23,4 +23,4 @@
 
 ## Передача в следующий спринт
 
-Готовы защищённая конфигурация и контракт `Goulash.Application.IAiProviderAdapter.CheckConnectionAsync(model, apiKey, cancellationToken)`, который возвращает `AiProviderCheckResult(Connected, WebSearchAvailable)`. Реального адаптера в этом спринте ещё нет: в обычном запуске реестр пуст, `PUT /ai/settings` отклоняет неизвестный идентификатор, а `POST /ai/settings/check` возвращает `PROVIDER_NOT_CONFIGURED`. Логика реестра, шифрования и правил обновления ключа проверяется модульно. Спринт 03 регистрирует реальный веб-адаптер и завершает проверку доступа к веб-источникам и HTTP-сценариев сохранения настроек.
+На передаче из спринта 02 были готовы защищённая конфигурация и контракт `Goulash.Application.IAiProviderAdapter.CheckConnectionAsync(model, apiKey, cancellationToken)`, который возвращает `AiProviderCheckResult(Connected, WebSearchAvailable)`. Тогда реального адаптера ещё не было, поэтому обычный запуск имел пустой реестр; спринт 03 подключает Perplexity Sonar, модельный список и полноценную проверку доступа к веб-источникам.

@@ -27,6 +27,7 @@ services:
       ASPNETCORE_URLS: http://+:8080
       Admin__InitialPassword: ${ADMIN_INITIAL_PASSWORD:?Set ADMIN_INITIAL_PASSWORD in .env (see .env.example)}
       Ai__EncryptionKey: ${AI_ENCRYPTION_KEY:?Set AI_ENCRYPTION_KEY in .env (see .env.example)}
+      Ai__ProviderTimeoutSeconds: ${AI_PROVIDER_TIMEOUT_SECONDS:-45}
       Database__Host: db
       Database__Port: 5432
       Database__Name: ${POSTGRES_DB:-goulash}

@@ -13,6 +13,7 @@
     <Compile Include="..\Api\Providers\AiProviderRegistry.cs" Link="Production\AiProviderRegistry.cs" />
     <Compile Include="..\Api\Providers\AiSettingsKeyPolicy.cs" Link="Production\AiSettingsKeyPolicy.cs" />
     <Compile Include="..\Application\IAiProviderAdapter.cs" Link="Production\IAiProviderAdapter.cs" />
+    <Compile Include="..\Application\SupplierDiscoveryEvidencePolicy.cs" Link="Production\SupplierDiscoveryEvidencePolicy.cs" />
     <Compile Include="..\Domain\AiProviderSetting.cs" Link="Production\AiProviderSetting.cs" />
   </ItemGroup>
 </Project>
