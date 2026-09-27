@@ -21,22 +21,45 @@ export class ApiError extends Error {
 }
 
 const apiRoot = '/api/v1'
+const unauthorizedEvent = 'goulash:unauthorized'
+let csrfToken: string | null = null
+let csrfRequest: Promise<string> | null = null
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+type RequestOptions = {
+  signal?: AbortSignal
+  redirectOnUnauthorized?: boolean
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  options: RequestOptions = {},
+): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json, application/problem+json')
   if (init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 
+  if (!isSafeMethod(method)) {
+    headers.set('X-CSRF-Token', await getCsrfToken(options.signal))
+  }
+
   const response = await fetch(`${apiRoot}${path}`, {
     ...init,
+    method,
     headers,
+    signal: options.signal ?? init.signal,
     credentials: 'include',
   })
 
   if (!response.ok) {
     const problem = await readProblem(response)
+    if (problem.code === 'CSRF_INVALID' || response.status === 401) csrfToken = null
+    if (response.status === 401 && options.redirectOnUnauthorized !== false) {
+      window.dispatchEvent(new Event(unauthorizedEvent))
+    }
     throw new ApiError(
       problem.title ?? 'Не удалось выполнить запрос',
       response.status,
@@ -50,6 +73,47 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return await response.json() as T
 }
 
+async function getCsrfToken(signal?: AbortSignal): Promise<string> {
+  if (csrfToken) return csrfToken
+  if (csrfRequest) return csrfRequest
+
+  csrfRequest = (async () => {
+    const response = await fetch(`${apiRoot}/auth/csrf`, {
+      method: 'GET',
+      headers: { Accept: 'application/json, application/problem+json' },
+      credentials: 'include',
+      signal,
+    })
+    if (!response.ok) {
+      const problem = await readProblem(response)
+      throw new ApiError(
+        problem.title ?? 'Не удалось подготовить защищённый запрос',
+        response.status,
+        problem.code ?? 'HTTP_ERROR',
+        problem.traceId,
+        problem.detail,
+      )
+    }
+
+    const result = await response.json() as { csrfToken?: unknown }
+    if (typeof result.csrfToken !== 'string' || result.csrfToken.length === 0) {
+      throw new ApiError('Сервер не выдал токен защиты запроса', response.status, 'CSRF_TOKEN_MISSING')
+    }
+    csrfToken = result.csrfToken
+    return csrfToken
+  })()
+
+  try {
+    return await csrfRequest
+  } finally {
+    csrfRequest = null
+  }
+}
+
+function isSafeMethod(method: string) {
+  return ['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)
+}
+
 async function readProblem(response: Response): Promise<ProblemDetails> {
   try {
     return await response.json() as ProblemDetails
@@ -59,16 +123,88 @@ async function readProblem(response: Response): Promise<ProblemDetails> {
 }
 
 export const apiClient = {
-  get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { method: 'GET', signal }),
-  post: <T, TBody = unknown>(path: string, body?: TBody, signal?: AbortSignal) =>
-    request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body), signal }),
-  put: <T, TBody = unknown>(path: string, body: TBody, signal?: AbortSignal) =>
-    request<T>(path, { method: 'PUT', body: JSON.stringify(body), signal }),
-  delete: <T>(path: string, signal?: AbortSignal) => request<T>(path, { method: 'DELETE', signal }),
+  get: <T>(path: string, signal?: AbortSignal) =>
+    request<T>(path, { method: 'GET', signal }, { signal }),
+  post: <T, TBody = unknown>(path: string, body?: TBody, options: RequestOptions = {}) =>
+    request<T>(path, {
+      method: 'POST',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }, options),
+  put: <T, TBody = unknown>(path: string, body: TBody, options: RequestOptions = {}) =>
+    request<T>(path, { method: 'PUT', body: JSON.stringify(body) }, options),
+  delete: <T>(path: string, options: RequestOptions = {}) =>
+    request<T>(path, { method: 'DELETE' }, options),
 }
 
 export type ReadinessResponse = { status: 'ready' }
+export type AuthSessionResponse = { authenticated: true }
+export type AiProvider = {
+  id: string
+  displayName: string
+  supportsWebSearch: boolean
+  models: string[]
+}
+export type AiProvidersResponse = { items: AiProvider[] }
+export type AiSettings = {
+  providerId: string | null
+  model: string | null
+  hasApiKey: boolean
+  apiKeyMask: string | null
+  updatedAt: string | null
+}
+export type AiSettingsUpdate = {
+  providerId: string
+  model: string
+  apiKey?: string
+}
+export type AiSettingsCheck = {
+  connected: boolean
+  webSearchAvailable: boolean
+  checkedAt: string
+}
 
 export function getReadiness(signal?: AbortSignal) {
   return apiClient.get<ReadinessResponse>('/health/ready', signal)
+}
+
+export function getAuthSession(signal?: AbortSignal) {
+  return request<AuthSessionResponse>(
+    '/auth/session',
+    { method: 'GET', signal },
+    { signal, redirectOnUnauthorized: false },
+  )
+}
+
+export async function login(password: string) {
+  await apiClient.post<void, { password: string }>('/auth/login', { password }, {
+    redirectOnUnauthorized: false,
+  })
+  // The token used for login belongs to the anonymous principal.
+  csrfToken = null
+}
+
+export async function logout() {
+  await apiClient.post<void>('/auth/logout')
+  // A token issued for the signed-in principal cannot be reused after logout.
+  csrfToken = null
+}
+
+export function getAiProviders(signal?: AbortSignal) {
+  return apiClient.get<AiProvidersResponse>('/ai/providers', signal)
+}
+
+export function getAiSettings(signal?: AbortSignal) {
+  return apiClient.get<AiSettings>('/ai/settings', signal)
+}
+
+export function updateAiSettings(settings: AiSettingsUpdate) {
+  return apiClient.put<AiSettings>('/ai/settings', settings)
+}
+
+export function deleteAiApiKey() {
+  return apiClient.delete<void>('/ai/settings/key')
+}
+
+export function checkAiSettings() {
+  return apiClient.post<AiSettingsCheck>('/ai/settings/check')
 }
