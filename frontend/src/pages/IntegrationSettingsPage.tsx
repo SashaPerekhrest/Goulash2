@@ -71,7 +71,7 @@ export function IntegrationSettingsPage() {
   const hasUnsavedChanges = Boolean(settings) && (
     providerId !== settings?.providerId || model !== settings?.model ||
     routeProvider !== (settings?.routeProvider ?? '') ||
-    basePrompt !== (selectedProvider?.basePrompt ?? settings?.basePrompt ?? '') || apiKey.length > 0
+    basePrompt !== (settings?.basePrompt ?? '') || apiKey.length > 0
   )
   const canCheck = Boolean(settings?.hasApiKey) && !hasUnsavedChanges && !checking && !saving && !deleting
 
@@ -115,9 +115,9 @@ export function IntegrationSettingsPage() {
       setModel(saved.model ?? '')
       setRouteProvider(saved.routeProvider ?? '')
       setBasePrompt(saved.basePrompt ?? selectedProvider.defaultBasePrompt)
-      setProviders((current) => current.map((provider) => provider.id === saved.providerId
-        ? { ...provider, basePrompt: saved.basePrompt ?? provider.defaultBasePrompt }
-        : provider))
+      setProviders((current) => current.map((provider) => ({
+        ...provider, basePrompt: saved.basePrompt ?? provider.defaultBasePrompt,
+      })))
       setApiKey('')
     } catch (cause) {
       setFormError(getSettingsError(cause, 'Не удалось сохранить настройки.'))
@@ -169,7 +169,6 @@ export function IntegrationSettingsPage() {
     setProviderId(nextProviderId)
     setModel(getRecommendedModel(nextProvider))
     setRouteProvider('')
-    setBasePrompt(nextProvider?.basePrompt ?? nextProvider?.defaultBasePrompt ?? '')
     setApiKey('')
     setFormError(null)
     setCheckState(null)
@@ -384,7 +383,7 @@ export function IntegrationSettingsPage() {
               </div>
               <span className={`connection-indicator ${checkState?.connected ? 'connected' : checkState?.error ? 'unknown' : ''}`} aria-hidden="true" />
             </div>
-            <p className="check-description">Проверка делает короткий запрос и отдельно показывает соединение и наличие веб-поиска.</p>
+            <p className="check-description">Проверка выполняет тот же поиск и разбор JSON, что и поиск поставщиков. Она может занять несколько минут.</p>
             <div className="check-results" aria-live="polite">
               <CheckRow label="Соединение" value={connectionLabel} success={checkState?.connected === true} />
               <CheckRow

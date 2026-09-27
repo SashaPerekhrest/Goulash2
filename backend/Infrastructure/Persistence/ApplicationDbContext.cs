@@ -246,6 +246,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         entity.Property(item => item.AcceptedCount).HasColumnName("accepted_count").HasDefaultValue(0);
         entity.Property(item => item.RejectedCount).HasColumnName("rejected_count").HasDefaultValue(0);
         entity.Property(item => item.ErrorCode).HasColumnName("error_code").HasMaxLength(80);
+        entity.Property(item => item.Outcome).HasColumnName("outcome").HasMaxLength(40);
+        entity.Property(item => item.EvidenceCount).HasColumnName("evidence_count").HasDefaultValue(0);
         entity.HasIndex(item => item.StartedAt).HasDatabaseName("ix_discovery_runs_started_at");
     }
 

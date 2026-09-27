@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using Goulash.Api.Providers;
 using Goulash.Application;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Goulash.Api.Tests;
@@ -11,7 +12,7 @@ public sealed class DiscoveryFilteringTests
     [Fact]
     public async Task EmptyQueryAndFiltersAreRejectedBeforeCallingProvider()
     {
-        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory("{}"), 5);
+        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory("{}"));
 
         await Assert.ThrowsAsync<ArgumentException>(() => adapter.DiscoverAsync(
             "sonar", "test-key", "  ", new SupplierDiscoveryFilters(), 5, CancellationToken.None));
@@ -20,7 +21,7 @@ public sealed class DiscoveryFilteringTests
     [Fact]
     public async Task MissingProviderKeyIsReportedWithoutCallingProvider()
     {
-        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory("{}"), 5);
+        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory("{}"));
 
         var error = await Assert.ThrowsAsync<AiProviderException>(() => adapter.DiscoverAsync(
             "sonar", "", "food suppliers", new SupplierDiscoveryFilters(), 5, CancellationToken.None));
@@ -44,7 +45,7 @@ public sealed class DiscoveryFilteringTests
             """;
         var adapter = new PerplexityProviderAdapter(
             new StaticHttpClientFactory(CreateProviderResponse(content, sourceUrl,
-                "Supplier Alpha is a food supplier in Moscow.")), 5);
+                "Supplier Alpha is a food supplier in Moscow.")));
 
         var result = await adapter.DiscoverAsync(
             "sonar", "test-key", "food suppliers", new SupplierDiscoveryFilters(), 5, CancellationToken.None);
@@ -61,7 +62,7 @@ public sealed class DiscoveryFilteringTests
     {
         const string sourceUrl = "https://suppliers.example.com/list";
         var adapter = new PerplexityProviderAdapter(
-            new StaticHttpClientFactory(CreateProviderResponse("not-json", sourceUrl, "Supplier Alpha")), 5);
+            new StaticHttpClientFactory(CreateProviderResponse("not-json", sourceUrl, "Supplier Alpha")));
 
         var error = await Assert.ThrowsAsync<AiProviderException>(() => adapter.DiscoverAsync(
             "sonar", "test-key", "food suppliers", new SupplierDiscoveryFilters(), 5, CancellationToken.None));
@@ -70,14 +71,59 @@ public sealed class DiscoveryFilteringTests
     }
 
     [Fact]
-    public async Task ProviderTimeoutIsReportedWithoutLeakingHttpException()
+    public async Task NameWithoutSourceUrlIsMatchedToCitationTitleAndLongSnippetIsKept()
     {
-        var adapter = new PerplexityProviderAdapter(new HandlerHttpClientFactory(new DelayedResponseHandler()), 1);
+        const string url = "https://eggfarm.ru/wholesale";
+        var content = "{\"suppliers\":[{\"name\":\"Ферма Яйцо\",\"facts\":[]}]}";
+        var providerResponse = JsonSerializer.Serialize(new
+        {
+            choices = new[] { new { message = new { content } } },
+            search_results = new[] { new { url, title = "Ферма Яйцо — яйца оптом",
+                snippet = "Яйца оптом. " + new string('x', 3000) } }
+        });
+        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory(providerResponse));
+        var response = await adapter.DiscoverAsync("sonar", "test-key", "яйца оптом",
+            new SupplierDiscoveryFilters(), 5, CancellationToken.None);
 
-        var error = await Assert.ThrowsAsync<AiProviderException>(() => adapter.DiscoverAsync(
-            "sonar", "test-key", "food suppliers", new SupplierDiscoveryFilters(), 5, CancellationToken.None));
+        Assert.Equal("candidates", response.Outcome);
+        Assert.Single(response.Candidates);
+        Assert.Equal(2000, response.Candidates[0].NameEvidence.Excerpt.Length);
+        Assert.Equal(1, response.EvidenceCount);
+    }
 
-        Assert.Equal(ProviderFailureCode.Timeout, error.Code);
+    [Theory]
+    [InlineData("```json\n{\"suppliers\":[]}\n```")]
+    [InlineData("Result:\n{\"suppliers\":[]}")]
+    public void JsonWrappedInModelProseIsParsed(string content)
+    {
+        var result = SupplierDiscoveryResponseParser.Parse(content, []);
+        Assert.Empty(result.Candidates);
+    }
+
+    [Fact]
+    public void WrongModelSourceUrlCanBeReplacedByMatchingProviderCitation()
+    {
+        var evidence = new SupplierDiscoveryEvidence(new Uri("https://egg-farm.ru/about"),
+            "Птицефабрика Рассвет — яйца оптом", "Птицефабрика Рассвет предлагает яйца оптом.", DateTimeOffset.UtcNow);
+        var content = """
+            {"suppliers":[{"name":"Птицефабрика Рассвет","nameSourceUrl":"https://wrong.example.org"}]}
+            """;
+
+        var result = SupplierDiscoveryResponseParser.Parse(content, [evidence]);
+
+        Assert.Single(result.Candidates);
+        Assert.Equal(evidence.Url, result.Candidates[0].NameEvidence.Url);
+        Assert.Empty(result.Candidates[0].Facts);
+    }
+
+    [Fact]
+    public async Task CallerCancellationStopsProviderRequest()
+    {
+        var adapter = new PerplexityProviderAdapter(new HandlerHttpClientFactory(new DelayedResponseHandler()));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => adapter.DiscoverAsync(
+            "sonar", "test-key", "food suppliers", new SupplierDiscoveryFilters(), 5, cancellation.Token));
     }
 
     [Fact]
@@ -106,7 +152,7 @@ public sealed class DiscoveryFilteringTests
                     snippet = string.Join(", ", names) + " operate in Moscow." }
             }
         });
-        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory(response), 5);
+        var adapter = new PerplexityProviderAdapter(new StaticHttpClientFactory(response));
         var filters = new SupplierDiscoveryFilters(City: "Moscow");
 
         var result = await adapter.DiscoverAsync("sonar", "test-key", string.Empty, filters, 5, CancellationToken.None);
@@ -168,4 +214,12 @@ public sealed class DiscoveryFilteringTests
                 Content = new StringContent(response)
             });
     }
+}
+
+internal static class DiscoveryTestExtensions
+{
+    public static Task<SupplierDiscoveryResult> DiscoverAsync(this PerplexityProviderAdapter adapter,
+        string model, string apiKey, string query, SupplierDiscoveryFilters filters, int limit,
+        CancellationToken token) => new SupplierDiscoveryService(NullLogger<SupplierDiscoveryService>.Instance)
+            .DiscoverAsync(adapter, model, apiKey, null, AiProviderPromptDefaults.Shared, query, filters, limit, token);
 }

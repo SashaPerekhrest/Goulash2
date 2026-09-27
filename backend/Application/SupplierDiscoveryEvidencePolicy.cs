@@ -42,11 +42,14 @@ public static partial class SupplierDiscoveryEvidencePolicy
         evidence = null;
         if (!TryNormalizeHttpUrl(url, out var uri) || uri.AbsoluteUri.Length > MaxUrlLength ||
             string.IsNullOrWhiteSpace(title) || title.Trim().Length > MaxTitleLength ||
-            string.IsNullOrWhiteSpace(excerpt) || excerpt.Trim().Length > MaxExcerptLength ||
+            string.IsNullOrWhiteSpace(excerpt) ||
             retrievedAt.Offset != TimeSpan.Zero)
             return false;
 
-        evidence = new SupplierDiscoveryEvidence(uri, title.Trim(), excerpt.Trim(), retrievedAt);
+        // Keep a bounded excerpt for storage without discarding a useful citation entirely.
+        var boundedExcerpt = excerpt.Trim();
+        if (boundedExcerpt.Length > MaxExcerptLength) boundedExcerpt = boundedExcerpt[..MaxExcerptLength];
+        evidence = new SupplierDiscoveryEvidence(uri, title.Trim(), boundedExcerpt, retrievedAt);
         return true;
     }
 
@@ -145,8 +148,17 @@ public static partial class SupplierDiscoveryEvidencePolicy
     public static bool ContainsSupplierName(string supplierName, string text)
     {
         var name = NormalizeSearchText(supplierName);
-        return name.Length >= 3 && (" " + NormalizeSearchText(text) + " ")
-            .Contains(" " + name + " ", StringComparison.Ordinal);
+        if (name.Length < 3) return false;
+        var source = " " + NormalizeSearchText(text) + " ";
+        if (source.Contains(" " + name + " ", StringComparison.Ordinal)) return true;
+        // Search headings often omit the legal form even when the company name is otherwise exact.
+        foreach (var prefix in new[] { "ооо ", "ао ", "пао ", "оао ", "зао ", "ип " })
+        {
+            if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var core = name[prefix.Length..];
+            if (core.Length >= 7 && source.Contains(" " + core + " ", StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 
     public static string NormalizeSearchText(string value)

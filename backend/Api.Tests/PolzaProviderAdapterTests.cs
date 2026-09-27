@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Goulash.Api.Providers;
 using Goulash.Application;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Goulash.Api.Tests;
@@ -24,7 +25,7 @@ public sealed class PolzaProviderAdapterTests
     }
 
     [Fact]
-    public async Task DiscoveryKeepsSearchAndJsonRequestsSeparateAndPassesOptionalRoute()
+    public async Task DiscoveryUsesOneSearchRequestAndPassesOptionalRoute()
     {
         const string sourceUrl = "https://alphafoods.com/about";
         const string excerpt = "Supplier Alpha is a food supplier based in Yekaterinburg.";
@@ -44,7 +45,7 @@ public sealed class PolzaProviderAdapterTests
                 {
                     message = new
                     {
-                        content = "Found Supplier Alpha.",
+                        content = JsonSerializer.Serialize(new { suppliers = new[] { candidate } }),
                         annotations = new[]
                         {
                             new
@@ -57,37 +58,30 @@ public sealed class PolzaProviderAdapterTests
                 }
             }
         });
-        var extractionResponse = JsonSerializer.Serialize(new
-        {
-            choices = new[] { new { message = new { content = JsonSerializer.Serialize(new { suppliers = new[] { candidate } }) } } }
-        });
-        var handler = new RecordingHandler(searchResponse, extractionResponse);
+        var handler = new RecordingHandler(searchResponse);
         var adapter = CreateAdapter(handler);
 
         const string customPrompt = "Prefer suppliers with a warehouse in the selected city.";
-        var result = await adapter.DiscoverAsync("openai/gpt-4o", "test-key", "OpenAI", customPrompt,
-            "food suppliers in Yekaterinburg", new SupplierDiscoveryFilters(City: "Yekaterinburg"), 5,
-            CancellationToken.None);
+        var result = await new SupplierDiscoveryService(NullLogger<SupplierDiscoveryService>.Instance)
+            .DiscoverAsync(adapter, "openai/gpt-4o", "test-key", "OpenAI", customPrompt,
+                "food suppliers in Yekaterinburg", new SupplierDiscoveryFilters(City: "Yekaterinburg"), 5,
+                CancellationToken.None);
 
         Assert.Single(result.Candidates);
         Assert.Equal("Supplier Alpha", result.Candidates[0].Name);
-        Assert.Equal(2, handler.RequestBodies.Count);
+        Assert.Single(handler.RequestBodies);
         using var search = JsonDocument.Parse(handler.RequestBodies[0]);
-        using var extraction = JsonDocument.Parse(handler.RequestBodies[1]);
         var searchRoot = search.RootElement;
         Assert.Equal("exa", searchRoot.GetProperty("plugins")[0].GetProperty("engine").GetString());
+        Assert.DoesNotContain("fieldKey", searchRoot.GetProperty("plugins")[0].GetProperty("search_prompt").GetString());
         Assert.False(searchRoot.TryGetProperty("response_format", out _));
         Assert.Equal("OpenAI", searchRoot.GetProperty("provider").GetProperty("only")[0].GetString());
-        var extractionRoot = extraction.RootElement;
-        Assert.True(extractionRoot.TryGetProperty("response_format", out _));
-        Assert.False(extractionRoot.TryGetProperty("plugins", out _));
-        Assert.Equal("OpenAI", extractionRoot.GetProperty("provider").GetProperty("only")[0].GetString());
-        Assert.Equal(customPrompt, extractionRoot.GetProperty("messages")[0].GetProperty("content").GetString());
-        Assert.Contains(sourceUrl, extractionRoot.GetProperty("messages")[1].GetProperty("content").GetString());
+        Assert.Equal(customPrompt, searchRoot.GetProperty("messages")[0].GetProperty("content").GetString());
+        Assert.Contains("food suppliers in Yekaterinburg", searchRoot.GetProperty("messages")[1].GetProperty("content").GetString());
     }
 
     private static PolzaProviderAdapter CreateAdapter(RecordingHandler handler) =>
-        new(new StaticHttpClientFactory(new HttpClient(handler)), timeoutSeconds: 5);
+        new(new StaticHttpClientFactory(new HttpClient(handler)));
 
     private sealed class StaticHttpClientFactory(HttpClient client) : IHttpClientFactory
     {

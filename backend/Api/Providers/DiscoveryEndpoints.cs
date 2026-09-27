@@ -67,7 +67,7 @@ public static class DiscoveryEndpoints
         catch (AiProviderException exception)
         {
             var error = MapProviderFailure(exception.Code);
-            run.Fail(error.Code, DateTimeOffset.UtcNow);
+            run.Fail(error.Code, DateTimeOffset.UtcNow, exception.Stage);
             await PersistFailedRunAsync(db, run, cancellationToken);
             return ProblemResponses.Create(context, error.Status, error.Title, error.Code);
         }
@@ -89,7 +89,7 @@ public static class DiscoveryEndpoints
         }
 
         var response = await persistence.SaveAsync(run, matching, discovery.RejectedRecordCount,
-            rejectedByFilters, cancellationToken);
+            rejectedByFilters, cancellationToken, discovery.Outcome, discovery.EvidenceCount);
         return Results.Ok(response);
     }
 

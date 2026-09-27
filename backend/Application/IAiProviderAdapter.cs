@@ -10,7 +10,7 @@ public interface IAiProviderAdapter
     bool SupportsWebSearch { get; }
     bool SupportsFreeformModel => false;
     bool SupportsProviderRouting => false;
-    string DefaultDiscoveryPrompt => AiProviderPromptDefaults.ForProvider(Id);
+    string DefaultDiscoveryPrompt => AiProviderPromptDefaults.Shared;
     IReadOnlyCollection<string> SupportedModels => Array.Empty<string>();
 
     bool SupportsModel(string model) =>
@@ -25,20 +25,15 @@ public interface IAiProviderAdapter
 
 public sealed record AiProviderCheckResult(bool Connected, bool WebSearchAvailable);
 
-public interface ISupplierDiscoveryAdapter : IAiProviderAdapter
+/// <summary>Provider wire protocol only. The discovery algorithm and evidence checks are shared.</summary>
+public interface IAiSearchTransport : IAiProviderAdapter
 {
-    Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string query,
-        SupplierDiscoveryFilters filters, int limit, CancellationToken cancellationToken);
-
-    Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string? routeProvider, string query,
-        SupplierDiscoveryFilters filters, int limit, CancellationToken cancellationToken) =>
-        DiscoverAsync(model, apiKey, query, filters, limit, cancellationToken);
-
-    Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string? routeProvider,
-        string basePrompt, string query, SupplierDiscoveryFilters filters, int limit,
-        CancellationToken cancellationToken) =>
-        DiscoverAsync(model, apiKey, routeProvider, query, filters, limit, cancellationToken);
+    Task<AiSearchResponse> SearchAsync(string model, string apiKey, string? routeProvider,
+        string systemPrompt, string userPrompt, string searchQuery, CancellationToken cancellationToken);
 }
+
+public sealed record AiSearchResponse(string Content, IReadOnlyList<SupplierDiscoveryEvidence> Evidence,
+    string? FinishReason = null);
 
 /// <summary>Configured server-side discovery entry point; credentials are loaded from protected settings.</summary>
 public interface ISupplierDiscoveryProvider
@@ -86,7 +81,8 @@ public enum SupplierEvidenceStatus
 }
 
 public sealed record SupplierDiscoveryResult(IReadOnlyList<SupplierDiscoveryCandidate> Candidates,
-    int RejectedRecordCount, int RejectedFactCount = 0);
+    int RejectedRecordCount, int RejectedFactCount = 0, int EvidenceCount = 0,
+    string Outcome = "candidates", IReadOnlyDictionary<string, int>? RejectedReasons = null);
 
 public enum ProviderFailureCode
 {
@@ -97,7 +93,8 @@ public enum ProviderFailureCode
     UnsupportedModel
 }
 
-public sealed class AiProviderException(ProviderFailureCode code) : Exception("The AI provider request failed.")
+public sealed class AiProviderException(ProviderFailureCode code, string stage = "transport") : Exception("The AI provider request failed.")
 {
     public ProviderFailureCode Code { get; } = code;
+    public string Stage { get; } = stage;
 }

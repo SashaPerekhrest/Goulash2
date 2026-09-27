@@ -26,14 +26,16 @@ public sealed record SupplierDiscoveryResponse(
     IReadOnlyList<SupplierDiscoveryCard> Items,
     int AcceptedCount,
     int RejectedCount,
-    int UpdatedExistingCount);
+    int UpdatedExistingCount,
+    string Outcome = "candidates",
+    int EvidenceCount = 0);
 
 /// <summary>Persists accepted, evidence-checked discoveries and their database-backed response cards atomically.</summary>
 public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
 {
     public Task<SupplierDiscoveryResponse> SaveAsync(DiscoveryRun run,
         IReadOnlyList<SupplierDiscoveryCandidate> candidates, int providerRejectedCount, int initiallyRejectedCount,
-        CancellationToken cancellationToken) => transaction.ExecuteAsync(async (context, identityLock, token) =>
+        CancellationToken cancellationToken, string outcome = "candidates", int evidenceCount = 0) => transaction.ExecuteAsync(async (context, identityLock, token) =>
     {
         context.DiscoveryRuns.Add(run);
 
@@ -86,7 +88,8 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
             if (!acceptedIds.Contains(supplier.Id)) acceptedIds.Add(supplier.Id);
         }
 
-        run.Complete(acceptedIds.Count, rejectedCount, DateTimeOffset.UtcNow);
+        var finalOutcome = acceptedIds.Count > 0 ? "candidates" : rejectedCount > 0 ? "filtered_or_rejected" : outcome;
+        run.Complete(acceptedIds.Count, rejectedCount, DateTimeOffset.UtcNow, finalOutcome, evidenceCount);
         await context.SaveChangesAsync(token);
 
         var savedSuppliers = await context.Suppliers.AsNoTracking().AsSplitQuery()
@@ -96,7 +99,8 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
                     .ThenInclude(link => link.Source)
             .ToListAsync(token);
         var cards = savedSuppliers.OrderBy(supplier => acceptedIds.IndexOf(supplier.Id)).Select(ToCard).ToArray();
-        return new SupplierDiscoveryResponse(run.Id, cards, cards.Length, rejectedCount, updatedIds.Count);
+        return new SupplierDiscoveryResponse(run.Id, cards, cards.Length, rejectedCount, updatedIds.Count,
+            finalOutcome, evidenceCount);
     }, cancellationToken);
 
     private static IEnumerable<string> GetLockKeys(SupplierDiscoveryCandidate candidate)
@@ -363,7 +367,8 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
     {
         if (candidate is null || !SupplierDiscoveryEvidencePolicy.IsValidSupplierName(candidate.Name) ||
             !ValidEvidence(candidate.NameEvidence) ||
-            !SupplierDiscoveryEvidencePolicy.ContainsSupplierName(candidate.Name, candidate.NameEvidence.Excerpt) ||
+            !(SupplierDiscoveryEvidencePolicy.ContainsSupplierName(candidate.Name, candidate.NameEvidence.Excerpt) ||
+              SupplierDiscoveryEvidencePolicy.ContainsSupplierName(candidate.Name, candidate.NameEvidence.Title)) ||
             candidate.Facts is null || candidate.Facts.Count > 100) return false;
 
         if (!string.IsNullOrWhiteSpace(candidate.WebsiteUrl) &&

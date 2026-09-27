@@ -7,6 +7,15 @@ namespace Goulash.Api.Tests;
 public sealed class SupplierDiscoveryEvidenceTests
 {
     [Fact]
+    public void SearchTitleMayOmitLegalFormButMustStillNameTheBusiness()
+    {
+        Assert.True(SupplierDiscoveryEvidencePolicy.ContainsSupplierName("ООО Птицефабрика Рассвет",
+            "Птицефабрика Рассвет — яйца оптом"));
+        Assert.False(SupplierDiscoveryEvidencePolicy.ContainsSupplierName("ООО Птицефабрика Рассвет",
+            "Яйца оптом от птицефабрик"));
+    }
+
+    [Fact]
     public void NumberMustAppearAsACompleteTokenInTheSearchSnippet()
     {
         using var ten = JsonDocument.Parse("10");

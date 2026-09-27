@@ -211,6 +211,8 @@ export type DiscoverySearchResponse = {
   acceptedCount: number
   rejectedCount: number
   updatedExistingCount: number
+  outcome: 'candidates' | 'no_sources' | 'model_empty' | 'invalid_candidates' | 'filtered_or_rejected'
+  evidenceCount: number
 }
 
 export type SupplierFavoriteResponse = { id: string; isFavorite: boolean }
@@ -383,7 +385,9 @@ function isDiscoverySearchResponse(value: unknown): value is DiscoverySearchResp
     !Array.isArray(value.items) || value.items.length > 5 ||
     !isNonNegativeInteger(value.acceptedCount) || value.acceptedCount !== value.items.length ||
     !isNonNegativeInteger(value.rejectedCount) || !isNonNegativeInteger(value.updatedExistingCount) ||
-    value.updatedExistingCount > value.acceptedCount) return false
+    value.updatedExistingCount > value.acceptedCount ||
+    !['candidates', 'no_sources', 'model_empty', 'invalid_candidates', 'filtered_or_rejected'].includes(value.outcome as string) ||
+    !isNonNegativeInteger(value.evidenceCount)) return false
 
   return value.items.every((item) => isRecord(item) &&
     typeof item.id === 'string' && item.id.length > 0 &&

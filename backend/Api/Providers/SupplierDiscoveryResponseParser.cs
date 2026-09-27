@@ -14,7 +14,21 @@ internal static class SupplierDiscoveryResponseParser
         JsonDocument modelDocument;
         try
         {
-            modelDocument = JsonDocument.Parse(content, new JsonDocumentOptions { MaxDepth = 32 });
+            var trimmed = content.Trim();
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                var firstLineEnd = trimmed.IndexOf('\n');
+                var closingFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+                if (firstLineEnd >= 0 && closingFence > firstLineEnd)
+                    trimmed = trimmed[(firstLineEnd + 1)..closingFence].Trim();
+            }
+            if (!trimmed.StartsWith('{'))
+            {
+                var start = trimmed.IndexOf('{');
+                var end = trimmed.LastIndexOf('}');
+                if (start >= 0 && end > start) trimmed = trimmed[start..(end + 1)];
+            }
+            modelDocument = JsonDocument.Parse(trimmed, new JsonDocumentOptions { MaxDepth = 32 });
         }
         catch (JsonException)
         {
@@ -33,6 +47,7 @@ internal static class SupplierDiscoveryResponseParser
             var candidates = new List<SupplierDiscoveryCandidate>();
             var rejectedRecords = 0;
             var rejectedFacts = 0;
+            var rejectedReasons = new Dictionary<string, int>(StringComparer.Ordinal);
             var index = 0;
             foreach (var supplier in suppliers.EnumerateArray())
             {
@@ -42,10 +57,12 @@ internal static class SupplierDiscoveryResponseParser
                     continue;
                 }
 
-                if (!TryParseCandidate(supplier, byUrl, out var candidate, out var rejectedFactsForRecord))
+                if (!TryParseCandidate(supplier, byUrl, out var candidate, out var rejectedFactsForRecord,
+                        out var rejectionReason))
                 {
                     rejectedRecords++;
                     rejectedFacts += rejectedFactsForRecord;
+                    rejectedReasons[rejectionReason!] = rejectedReasons.GetValueOrDefault(rejectionReason!) + 1;
                     continue;
                 }
 
@@ -53,7 +70,8 @@ internal static class SupplierDiscoveryResponseParser
                 rejectedFacts += rejectedFactsForRecord;
             }
 
-            return new SupplierDiscoveryResult(candidates.AsReadOnly(), rejectedRecords, rejectedFacts);
+            return new SupplierDiscoveryResult(candidates.AsReadOnly(), rejectedRecords, rejectedFacts,
+                RejectedReasons: rejectedReasons);
         }
     }
 
@@ -74,7 +92,7 @@ internal static class SupplierDiscoveryResponseParser
                 fieldKey = new { type = "string" },
                 itemKey = new { type = "string" },
                 value = new { anyOf = scalar },
-                sourceUrl = new { type = "string" }
+                sourceUrl = new { type = new[] { "string", "null" } }
             },
             required = new[] { "fieldKey", "itemKey", "value", "sourceUrl" }
         };
@@ -85,7 +103,7 @@ internal static class SupplierDiscoveryResponseParser
             properties = new
             {
                 name = new { type = "string" },
-                nameSourceUrl = new { type = "string" },
+                nameSourceUrl = new { type = new[] { "string", "null" } },
                 websiteUrl = new { type = new[] { "string", "null" } },
                 websiteSourceUrl = new { type = new[] { "string", "null" } },
                 facts = new { type = "array", items = factSchema }
@@ -113,17 +131,33 @@ internal static class SupplierDiscoveryResponseParser
             : null;
 
     private static bool TryParseCandidate(JsonElement input, IReadOnlyDictionary<string, SupplierDiscoveryEvidence> evidenceByUrl,
-        out SupplierDiscoveryCandidate? candidate, out int rejectedFacts)
+        out SupplierDiscoveryCandidate? candidate, out int rejectedFacts, out string? rejectionReason)
     {
         candidate = null;
         rejectedFacts = 0;
-        if (input.ValueKind != JsonValueKind.Object ||
-            ReadString(input, "name") is not { } name || !SupplierDiscoveryEvidencePolicy.IsValidSupplierName(name) ||
-            !TryGetEvidence(input, "nameSourceUrl", evidenceByUrl, out var nameEvidence) ||
-            !SupplierDiscoveryEvidencePolicy.ContainsSupplierName(name, nameEvidence!.Excerpt) ||
-            !input.TryGetProperty("facts", out var facts) || facts.ValueKind != JsonValueKind.Array ||
-            facts.GetArrayLength() > MaxFactsPerCandidate)
+        rejectionReason = null;
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            rejectionReason = "invalid_shape";
             return false;
+        }
+        var name = ReadString(input, "name");
+        if (!SupplierDiscoveryEvidencePolicy.IsValidSupplierName(name))
+        {
+            rejectionReason = "invalid_name";
+            return false;
+        }
+        if (!TryGetNameEvidence(input, name!, evidenceByUrl, out var nameEvidence))
+        {
+            rejectionReason = "name_not_in_sources";
+            return false;
+        }
+        if (input.TryGetProperty("facts", out var facts) &&
+            (facts.ValueKind != JsonValueKind.Array || facts.GetArrayLength() > MaxFactsPerCandidate))
+        {
+            rejectionReason = "invalid_facts_shape";
+            return false;
+        }
 
         string? websiteUrl = null;
         SupplierDiscoveryEvidence? websiteEvidence = null;
@@ -137,20 +171,21 @@ internal static class SupplierDiscoveryResponseParser
         }
 
         var observations = new List<SupplierObservedFact>();
-        foreach (var fact in facts.EnumerateArray())
+        foreach (var fact in facts.ValueKind == JsonValueKind.Array ? facts.EnumerateArray().ToArray() : Array.Empty<JsonElement>())
         {
-            if (TryParseFact(fact, evidenceByUrl, out var observation))
+            if (TryParseFact(fact, name!, evidenceByUrl, out var observation))
                 observations.Add(observation!);
             else
                 rejectedFacts++;
         }
 
-        candidate = new SupplierDiscoveryCandidate(name.Trim(), nameEvidence!, websiteUrl, websiteEvidence,
+        candidate = new SupplierDiscoveryCandidate(name!.Trim(), nameEvidence!, websiteUrl, websiteEvidence,
             observations.AsReadOnly());
         return true;
     }
 
-    private static bool TryParseFact(JsonElement fact, IReadOnlyDictionary<string, SupplierDiscoveryEvidence> evidenceByUrl,
+    private static bool TryParseFact(JsonElement fact, string supplierName,
+        IReadOnlyDictionary<string, SupplierDiscoveryEvidence> evidenceByUrl,
         out SupplierObservedFact? observation)
     {
         observation = null;
@@ -158,7 +193,7 @@ internal static class SupplierDiscoveryResponseParser
             ReadString(fact, "fieldKey") is not { } fieldKey || !SupplierDiscoveryEvidencePolicy.IsAllowedFactField(fieldKey) ||
             ReadString(fact, "itemKey") is not { } itemKey || itemKey.Length > 200 ||
             !fact.TryGetProperty("value", out var value) || !SupplierDiscoveryEvidencePolicy.IsSupportedFactValue(value) ||
-            !TryGetEvidence(fact, "sourceUrl", evidenceByUrl, out var evidence) ||
+            !TryGetFactEvidence(fact, supplierName, value, evidenceByUrl, out var evidence) ||
             !SupplierDiscoveryEvidencePolicy.EvidenceSupportsValue(value, evidence!.Excerpt))
             return false;
 
@@ -183,5 +218,33 @@ internal static class SupplierDiscoveryResponseParser
         return evidenceByUrl.TryGetValue(UrlKey(url), out evidence);
     }
 
-    private static AiProviderException InvalidResponse() => new(ProviderFailureCode.InvalidResponse);
+    private static bool TryGetNameEvidence(JsonElement source, string name,
+        IReadOnlyDictionary<string, SupplierDiscoveryEvidence> evidenceByUrl, out SupplierDiscoveryEvidence? evidence)
+    {
+        if (!string.IsNullOrWhiteSpace(ReadString(source, "nameSourceUrl")) &&
+            TryGetEvidence(source, "nameSourceUrl", evidenceByUrl, out evidence) &&
+            (SupplierDiscoveryEvidencePolicy.ContainsSupplierName(name, evidence!.Title) ||
+             SupplierDiscoveryEvidencePolicy.ContainsSupplierName(name, evidence.Excerpt)))
+            return true;
+        evidence = evidenceByUrl.Values.FirstOrDefault(item =>
+            SupplierDiscoveryEvidencePolicy.ContainsSupplierName(name, item.Title) ||
+            SupplierDiscoveryEvidencePolicy.ContainsSupplierName(name, item.Excerpt));
+        return evidence is not null;
+    }
+
+    private static bool TryGetFactEvidence(JsonElement source, string supplierName, JsonElement value,
+        IReadOnlyDictionary<string, SupplierDiscoveryEvidence> evidenceByUrl, out SupplierDiscoveryEvidence? evidence)
+    {
+        if (!string.IsNullOrWhiteSpace(ReadString(source, "sourceUrl")) &&
+            TryGetEvidence(source, "sourceUrl", evidenceByUrl, out evidence) &&
+            SupplierDiscoveryEvidencePolicy.EvidenceSupportsValue(value, evidence!.Excerpt))
+            return true;
+        evidence = evidenceByUrl.Values.FirstOrDefault(item =>
+            (SupplierDiscoveryEvidencePolicy.ContainsSupplierName(supplierName, item.Title) ||
+             SupplierDiscoveryEvidencePolicy.ContainsSupplierName(supplierName, item.Excerpt)) &&
+            SupplierDiscoveryEvidencePolicy.EvidenceSupportsValue(value, item.Excerpt));
+        return evidence is not null;
+    }
+
+    private static AiProviderException InvalidResponse() => new(ProviderFailureCode.InvalidResponse, "supplier_json");
 }
