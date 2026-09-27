@@ -23,6 +23,8 @@ export function IntegrationSettingsPage() {
   const [settings, setSettings] = useState<AiSettings | null>(null)
   const [providerId, setProviderId] = useState('')
   const [model, setModel] = useState('')
+  const [routeProvider, setRouteProvider] = useState('')
+  const [basePrompt, setBasePrompt] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -48,6 +50,8 @@ export function IntegrationSettingsPage() {
         const initialProvider = availableProviders.find((provider) => provider.id === initialProviderId)
         setProviderId(initialProviderId)
         setModel(savedSettings.model ?? getRecommendedModel(initialProvider))
+        setRouteProvider(savedSettings.routeProvider ?? '')
+        setBasePrompt(savedSettings.basePrompt ?? initialProvider?.basePrompt ?? initialProvider?.defaultBasePrompt ?? '')
       })
       .catch(() => {
         if (active) setLoadError('Не удалось загрузить список провайдеров и сохранённые настройки.')
@@ -65,7 +69,9 @@ export function IntegrationSettingsPage() {
   const selectedProvider = providers.find((provider) => provider.id === providerId)
   const needsNewKey = !settings?.hasApiKey || (settings.providerId !== null && providerId !== settings.providerId)
   const hasUnsavedChanges = Boolean(settings) && (
-    providerId !== settings?.providerId || model !== settings?.model || apiKey.length > 0
+    providerId !== settings?.providerId || model !== settings?.model ||
+    routeProvider !== (settings?.routeProvider ?? '') ||
+    basePrompt !== (selectedProvider?.basePrompt ?? settings?.basePrompt ?? '') || apiKey.length > 0
   )
   const canCheck = Boolean(settings?.hasApiKey) && !hasUnsavedChanges && !checking && !saving && !deleting
 
@@ -79,8 +85,14 @@ export function IntegrationSettingsPage() {
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
-    if (!providerId || !selectedProvider || !model) {
-      setFormError('Выберите провайдера и модель из списка.')
+    if (!providerId || !selectedProvider || !model.trim()) {
+      setFormError(selectedProvider?.supportsFreeformModel
+        ? 'Укажите провайдера и ID модели.'
+        : 'Выберите провайдера и модель из списка.')
+      return
+    }
+    if (!basePrompt.trim()) {
+      setFormError('Базовый промпт не может быть пустым.')
       return
     }
     if (needsNewKey && apiKey.trim().length === 0) {
@@ -93,12 +105,19 @@ export function IntegrationSettingsPage() {
     try {
       const saved = await updateAiSettings({
         providerId,
-        model,
+        model: model.trim(),
+        basePrompt,
+        ...(selectedProvider.supportsProviderRouting ? { routeProvider: routeProvider.trim() } : {}),
         ...(apiKey.length > 0 ? { apiKey } : {}),
       })
       setSettings(saved)
       setProviderId(saved.providerId ?? '')
       setModel(saved.model ?? '')
+      setRouteProvider(saved.routeProvider ?? '')
+      setBasePrompt(saved.basePrompt ?? selectedProvider.defaultBasePrompt)
+      setProviders((current) => current.map((provider) => provider.id === saved.providerId
+        ? { ...provider, basePrompt: saved.basePrompt ?? provider.defaultBasePrompt }
+        : provider))
       setApiKey('')
     } catch (cause) {
       setFormError(getSettingsError(cause, 'Не удалось сохранить настройки.'))
@@ -149,6 +168,8 @@ export function IntegrationSettingsPage() {
     const nextProvider = providers.find((provider) => provider.id === nextProviderId)
     setProviderId(nextProviderId)
     setModel(getRecommendedModel(nextProvider))
+    setRouteProvider('')
+    setBasePrompt(nextProvider?.basePrompt ?? nextProvider?.defaultBasePrompt ?? '')
     setApiKey('')
     setFormError(null)
     setCheckState(null)
@@ -209,20 +230,107 @@ export function IntegrationSettingsPage() {
                 </select>
               </FormField>
 
-              <FormField id="model" label="Модель">
-                <select
-                  id="model"
-                  className="text-input select-input"
-                  value={model}
+              <FormField
+                id="model"
+                label={selectedProvider?.supportsFreeformModel ? 'ID модели' : 'Модель'}
+                hint={selectedProvider?.supportsFreeformModel
+                  ? 'Введите ID из каталога Polza, например openai/gpt-4o.'
+                  : undefined}
+              >
+                {selectedProvider?.supportsFreeformModel ? (
+                  <input
+                    id="model"
+                    className="text-input"
+                    type="text"
+                    autoComplete="off"
+                    maxLength={200}
+                    value={model}
+                    onChange={(event) => {
+                      setModel(event.target.value)
+                      setFormError(null)
+                      setCheckState(null)
+                    }}
+                    placeholder={selectedProvider.models[0] ?? 'vendor/model'}
+                    disabled={saving || deleting || checking}
+                    required
+                  />
+                ) : (
+                  <select
+                    id="model"
+                    className="text-input select-input"
+                    value={model}
+                    onChange={(event) => {
+                      setModel(event.target.value)
+                      setCheckState(null)
+                    }}
+                    disabled={saving || deleting || checking || !selectedProvider?.models.length}
+                    required
+                  >
+                    {selectedProvider?.models.map((item) => <option key={item} value={item}>{item}</option>)}
+                  </select>
+                )}
+              </FormField>
+
+              {selectedProvider?.supportsProviderRouting && (
+                <FormField
+                  id="route-provider"
+                  label="Маршрут-провайдер (необязательно)"
+                  hint="Точное название провайдера из каталога Polza. Если оставить пустым, Polza выберет маршрут автоматически."
+                >
+                  <input
+                    id="route-provider"
+                    className="text-input"
+                    type="text"
+                    autoComplete="off"
+                    maxLength={120}
+                    value={routeProvider}
+                    onChange={(event) => {
+                      setRouteProvider(event.target.value)
+                      setFormError(null)
+                      setCheckState(null)
+                    }}
+                    placeholder="Например, OpenAI"
+                    disabled={saving || deleting || checking}
+                  />
+                </FormField>
+              )}
+
+              <FormField
+                id="base-prompt"
+                label="Базовый промпт"
+                hint={selectedProvider?.id === 'polza'
+                  ? 'Применяется при извлечении данных из найденных страниц. Сам веб-поиск строится по запросу и фильтрам.'
+                  : 'Инструкция передаётся модели вместе с запросом и фильтрами при поиске поставщиков.'}
+              >
+                <textarea
+                  id="base-prompt"
+                  className="text-input textarea-input"
+                  rows={10}
+                  maxLength={8000}
+                  value={basePrompt}
                   onChange={(event) => {
-                    setModel(event.target.value)
+                    setBasePrompt(event.target.value)
+                    setFormError(null)
                     setCheckState(null)
                   }}
-                  disabled={saving || deleting || checking || !selectedProvider?.models.length}
+                  disabled={saving || deleting || checking}
                   required
-                >
-                  {selectedProvider?.models.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
+                />
+                <div className="form-actions">
+                  <span className="inline-note">{basePrompt.length} / 8000</span>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => {
+                      setBasePrompt(selectedProvider?.defaultBasePrompt ?? '')
+                      setFormError(null)
+                      setCheckState(null)
+                    }}
+                    disabled={saving || deleting || checking || !selectedProvider}
+                  >
+                    Восстановить стандартный
+                  </button>
+                </div>
               </FormField>
 
               <FormField
@@ -321,7 +429,7 @@ function getSettingsError(error: unknown, fallback: string) {
     case 'API_KEY_REQUIRED': return 'Введите новый ключ для выбранного провайдера.'
     case 'UNSUPPORTED_PROVIDER': return 'Выбранный адаптер больше недоступен. Обновите список провайдеров.'
     case 'UNSUPPORTED_MODEL': return 'Эта модель не поддерживается выбранным адаптером.'
-    case 'VALIDATION_ERROR': return 'Проверьте провайдера, модель и API-ключ.'
+    case 'VALIDATION_ERROR': return 'Проверьте провайдера, модель, маршрут и API-ключ.'
     case 'CSRF_INVALID': return 'Не удалось подтвердить запрос. Повторите попытку.'
     case 'UNAUTHORIZED': return 'Сессия завершилась. Войдите снова.'
     default: return fallback

@@ -1,3 +1,4 @@
+using Goulash.Application;
 using Goulash.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -15,6 +16,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<SupplierImage> SupplierImages => Set<SupplierImage>();
     public DbSet<DiscoveryRun> DiscoveryRuns => Set<DiscoveryRun>();
     public DbSet<AiProviderSetting> AiProviderSettings => Set<AiProviderSetting>();
+    public DbSet<AiProviderPromptSetting> AiProviderPromptSettings => Set<AiProviderPromptSetting>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,6 +28,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         ConfigureImages(modelBuilder);
         ConfigureDiscoveryRuns(modelBuilder);
         ConfigureProviderSettings(modelBuilder);
+        ConfigureProviderPrompts(modelBuilder);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
@@ -255,8 +258,24 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         entity.Property(item => item.Id).HasColumnName("id").HasColumnType("uuid");
         entity.Property(item => item.ProviderId).HasColumnName("provider_id").HasMaxLength(120).IsRequired();
         entity.Property(item => item.Model).HasColumnName("model").HasMaxLength(200).IsRequired();
+        entity.Property(item => item.RouteProvider).HasColumnName("route_provider").HasMaxLength(120);
         entity.Property(item => item.EncryptedApiKey).HasColumnName("encrypted_api_key").HasColumnType("bytea");
         entity.Property(item => item.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone");
+    }
+
+    private static void ConfigureProviderPrompts(ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<AiProviderPromptSetting>();
+        entity.ToTable("ai_provider_prompts");
+        entity.HasKey(item => item.ProviderId);
+        entity.Property(item => item.ProviderId).HasColumnName("provider_id").HasMaxLength(120);
+        entity.Property(item => item.Prompt).HasColumnName("prompt").HasColumnType("text").IsRequired();
+        entity.Property(item => item.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone");
+        entity.HasData(
+            new AiProviderPromptSetting("perplexity", AiProviderPromptDefaults.Perplexity,
+                new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)),
+            new AiProviderPromptSetting("polza", AiProviderPromptDefaults.Polza,
+                new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)));
     }
 
     private static readonly ValueConverter<VerificationStatus, string> StatusConverter = new(

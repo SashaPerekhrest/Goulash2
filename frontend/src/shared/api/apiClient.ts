@@ -147,11 +147,17 @@ export type AiProvider = {
   displayName: string
   supportsWebSearch: boolean
   models: string[]
+  supportsFreeformModel: boolean
+  supportsProviderRouting: boolean
+  basePrompt: string
+  defaultBasePrompt: string
 }
 export type AiProvidersResponse = { items: AiProvider[] }
 export type AiSettings = {
   providerId: string | null
   model: string | null
+  routeProvider: string | null
+  basePrompt: string | null
   hasApiKey: boolean
   apiKeyMask: string | null
   updatedAt: string | null
@@ -159,6 +165,8 @@ export type AiSettings = {
 export type AiSettingsUpdate = {
   providerId: string
   model: string
+  routeProvider?: string
+  basePrompt?: string
   apiKey?: string
 }
 export type AiSettingsCheck = {

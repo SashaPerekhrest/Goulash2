@@ -104,10 +104,15 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddSingleton(new AdminPasswordVerifier(adminPassword));
 builder.Services.AddSingleton(keyProtector);
 builder.Services.AddHttpClient("Perplexity", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient("Polza", client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddSingleton(sp => new PerplexityProviderAdapter(
+    sp.GetRequiredService<IHttpClientFactory>(), providerTimeoutSeconds));
+builder.Services.AddSingleton(sp => new PolzaProviderAdapter(
     sp.GetRequiredService<IHttpClientFactory>(), providerTimeoutSeconds));
 builder.Services.AddSingleton<IAiProviderAdapter>(sp => sp.GetRequiredService<PerplexityProviderAdapter>());
 builder.Services.AddSingleton<ISupplierDiscoveryAdapter>(sp => sp.GetRequiredService<PerplexityProviderAdapter>());
+builder.Services.AddSingleton<IAiProviderAdapter>(sp => sp.GetRequiredService<PolzaProviderAdapter>());
+builder.Services.AddSingleton<ISupplierDiscoveryAdapter>(sp => sp.GetRequiredService<PolzaProviderAdapter>());
 builder.Services.AddSingleton<IAiProviderRegistry, AiProviderRegistry>();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISupplierDiscoveryProvider, ConfiguredSupplierDiscoveryProvider>();

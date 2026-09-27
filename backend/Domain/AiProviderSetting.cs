@@ -6,12 +6,14 @@ public sealed class AiProviderSetting
 
     private AiProviderSetting() { }
 
-    public AiProviderSetting(string providerId, string model, byte[]? encryptedApiKey, DateTimeOffset updatedAt)
+    public AiProviderSetting(string providerId, string model, byte[]? encryptedApiKey, DateTimeOffset updatedAt,
+        string? routeProvider = null)
     {
         if (updatedAt.Offset != TimeSpan.Zero) throw new ArgumentException("Dates must use UTC.", nameof(updatedAt));
         Id = SingletonId;
         ProviderId = providerId;
         Model = model;
+        RouteProvider = routeProvider;
         EncryptedApiKey = encryptedApiKey;
         UpdatedAt = updatedAt;
     }
@@ -19,14 +21,17 @@ public sealed class AiProviderSetting
     public Guid Id { get; private set; }
     public string ProviderId { get; private set; } = string.Empty;
     public string Model { get; private set; } = string.Empty;
+    public string? RouteProvider { get; private set; }
     public byte[]? EncryptedApiKey { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
-    public void Update(string providerId, string model, byte[]? encryptedApiKey, DateTimeOffset updatedAt)
+    public void Update(string providerId, string model, byte[]? encryptedApiKey, DateTimeOffset updatedAt,
+        string? routeProvider = null)
     {
         if (updatedAt.Offset != TimeSpan.Zero) throw new ArgumentException("Dates must use UTC.", nameof(updatedAt));
         ProviderId = providerId;
         Model = model;
+        RouteProvider = routeProvider;
         EncryptedApiKey = encryptedApiKey;
         UpdatedAt = updatedAt;
     }

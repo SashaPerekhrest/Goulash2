@@ -25,6 +25,10 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
         if (!adapter.SupportsModel(setting.Model))
             throw new AiProviderException(ProviderFailureCode.UnsupportedModel);
 
+        var promptSetting = await db.AiProviderPromptSettings.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProviderId == adapter.Id, cancellationToken);
+        var basePrompt = promptSetting?.Prompt ?? adapter.DefaultDiscoveryPrompt;
+
         string apiKey;
         try
         {
@@ -35,6 +39,7 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
             throw new AiProviderException(ProviderFailureCode.Unavailable);
         }
 
-        return await adapter.DiscoverAsync(setting.Model, apiKey, query, filters, Math.Clamp(limit, 1, 5), cancellationToken);
+        return await adapter.DiscoverAsync(setting.Model, apiKey, setting.RouteProvider, basePrompt, query,
+            filters, Math.Clamp(limit, 1, 5), cancellationToken);
     }
 }

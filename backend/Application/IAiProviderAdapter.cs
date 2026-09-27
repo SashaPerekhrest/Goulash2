@@ -8,6 +8,9 @@ public interface IAiProviderAdapter
     string Id { get; }
     string DisplayName { get; }
     bool SupportsWebSearch { get; }
+    bool SupportsFreeformModel => false;
+    bool SupportsProviderRouting => false;
+    string DefaultDiscoveryPrompt => AiProviderPromptDefaults.ForProvider(Id);
     IReadOnlyCollection<string> SupportedModels => Array.Empty<string>();
 
     bool SupportsModel(string model) =>
@@ -15,6 +18,9 @@ public interface IAiProviderAdapter
 
     /// <summary>Confirms both provider connectivity and availability of web search for the selected model.</summary>
     Task<AiProviderCheckResult> CheckConnectionAsync(string model, string apiKey, CancellationToken cancellationToken);
+
+    Task<AiProviderCheckResult> CheckConnectionAsync(string model, string apiKey, string? routeProvider,
+        CancellationToken cancellationToken) => CheckConnectionAsync(model, apiKey, cancellationToken);
 }
 
 public sealed record AiProviderCheckResult(bool Connected, bool WebSearchAvailable);
@@ -23,6 +29,15 @@ public interface ISupplierDiscoveryAdapter : IAiProviderAdapter
 {
     Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string query,
         SupplierDiscoveryFilters filters, int limit, CancellationToken cancellationToken);
+
+    Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string? routeProvider, string query,
+        SupplierDiscoveryFilters filters, int limit, CancellationToken cancellationToken) =>
+        DiscoverAsync(model, apiKey, query, filters, limit, cancellationToken);
+
+    Task<SupplierDiscoveryResult> DiscoverAsync(string model, string apiKey, string? routeProvider,
+        string basePrompt, string query, SupplierDiscoveryFilters filters, int limit,
+        CancellationToken cancellationToken) =>
+        DiscoverAsync(model, apiKey, routeProvider, query, filters, limit, cancellationToken);
 }
 
 /// <summary>Configured server-side discovery entry point; credentials are loaded from protected settings.</summary>

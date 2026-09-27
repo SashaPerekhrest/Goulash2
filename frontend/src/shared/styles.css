@@ -82,6 +82,7 @@ h1 { max-width: 720px; margin: 0; font: 700 clamp(30px, 4vw, 45px)/1.12 system-u
 .text-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #d8e0d7; border-radius: 8px; outline: none; background: #fcfdfb; color: #25372d; font: 13px system-ui, sans-serif; transition: border-color .15s ease, box-shadow .15s ease; }
 .text-input:focus { border-color: #7ba087; box-shadow: 0 0 0 3px #6e9a771a; }
 .text-input:disabled { color: #88938b; background: #f3f6f1; }
+.textarea-input { min-height: 200px; padding: 12px; resize: vertical; line-height: 1.5; }
 .select-input { appearance: none; padding-right: 38px; background-image: linear-gradient(45deg, transparent 50%, #718279 50%), linear-gradient(135deg, #718279 50%, transparent 50%); background-position: calc(100% - 17px) 18px, calc(100% - 12px) 18px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
 .inline-note { margin: 0; color: #8b7350; font-size: 11px; line-height: 1.55; }
 

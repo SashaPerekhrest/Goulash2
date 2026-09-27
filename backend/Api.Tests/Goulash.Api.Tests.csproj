@@ -13,7 +13,10 @@
     <Compile Include="..\Api\Providers\AiProviderRegistry.cs" Link="Production\AiProviderRegistry.cs" />
     <Compile Include="..\Api\Providers\AiSettingsKeyPolicy.cs" Link="Production\AiSettingsKeyPolicy.cs" />
     <Compile Include="..\Api\Providers\PerplexityProviderAdapter.cs" Link="Production\PerplexityProviderAdapter.cs" />
+    <Compile Include="..\Api\Providers\PolzaProviderAdapter.cs" Link="Production\PolzaProviderAdapter.cs" />
+    <Compile Include="..\Api\Providers\SupplierDiscoveryResponseParser.cs" Link="Production\SupplierDiscoveryResponseParser.cs" />
     <Compile Include="..\Application\IAiProviderAdapter.cs" Link="Production\IAiProviderAdapter.cs" />
+    <Compile Include="..\Application\AiProviderPromptDefaults.cs" Link="Production\AiProviderPromptDefaults.cs" />
     <Compile Include="..\Application\SupplierDiscoveryEvidencePolicy.cs" Link="Production\SupplierDiscoveryEvidencePolicy.cs" />
     <Compile Include="..\Application\SupplierDiscoveryMatcher.cs" Link="Production\SupplierDiscoveryMatcher.cs" />
     <Compile Include="..\Application\SupplierFactNormalizer.cs" Link="Production\SupplierFactNormalizer.cs" />
