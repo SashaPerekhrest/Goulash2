@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-goulash}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example first)}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
@@ -34,7 +34,7 @@ services:
       Database__User: ${POSTGRES_USER:-goulash}
       Database__Password: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example first)}
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8080}:8080"
     depends_on:
       db:
         condition: service_healthy
@@ -51,10 +51,30 @@ services:
       dockerfile: frontend/Dockerfile
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:80"
     depends_on:
       api:
         condition: service_healthy
 
+  https-proxy:
+    image: caddy:2-alpine
+    profiles: ["production"]
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:80:80"
+      - "${HTTPS_BIND:-0.0.0.0}:443:443"
+      - "${HTTPS_BIND:-0.0.0.0}:443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_started
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:

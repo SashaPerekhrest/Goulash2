@@ -1,9 +1,11 @@
 .git
 .dockerignore
 .env
+.env.*
 .local-profile
 .dotnet-home
 .docker-config
+.docker-review-temp
 .packages
 .nuget-http-cache
 **/bin

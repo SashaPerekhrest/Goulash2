@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   ApiError,
   discoverSuppliers,
@@ -59,6 +59,7 @@ const initialForm: DiscoveryForm = {
 }
 
 export function DiscoverPage() {
+  const location = useLocation()
   const [form, setForm] = useState(initialForm)
   const formRef = useRef(initialForm)
   const [settings, setSettings] = useState<AiSettings | null>(null)
@@ -457,7 +458,7 @@ export function DiscoverPage() {
                   <div className="discovery-card-main">
                     <div className="discovery-card-heading">
                       <div>
-                        <h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`}>{item.name}</Link></h3>
+                        <h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>{item.name}</Link></h3>
                         <p className="discovery-card-location">{item.city ?? 'Местоположение не указано'}</p>
                       </div>
                       {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть неподтверждённые сведения</span>}
@@ -498,7 +499,7 @@ export function DiscoverPage() {
                       <span aria-hidden="true">{item.isFavorite ? '★' : '☆'}</span>
                       <span>{item.isFavorite ? 'В избранном' : 'В избранное'}</span>
                     </button>
-                    <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`}>Подробнее</Link>
+                    <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>Подробнее</Link>
                   </div>
                 </Card>
               ))}

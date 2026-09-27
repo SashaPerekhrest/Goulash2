@@ -1,13 +1,30 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { ApiError, getSupplierDetails, type SupplierDetails, type SupplierFactSource, type SupplierSourcedValue } from '../shared/api/apiClient'
+import { Link, useLocation, useParams } from 'react-router-dom'
+import {
+  ApiError,
+  getSupplierDetails,
+  setSupplierFavorite,
+  setSupplierNote,
+  type SupplierDetails,
+  type SupplierSourcedValue,
+} from '../shared/api/apiClient'
+import { SourcedField, Source, formatDate } from '../shared/SourcedField'
 import { Card, ErrorNotice, PageLoading, SafeExternalLink } from '../shared/ui'
+
+type SupplierDetailsLocationState = { from?: string }
 
 export function SupplierDetailsPage() {
   const { id } = useParams()
+  const location = useLocation()
+  const backTo = (location.state as SupplierDetailsLocationState | null)?.from ?? '/suppliers'
   const [details, setDetails] = useState<SupplierDetails | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [favoriteError, setFavoriteError] = useState<string | null>(null)
+  const [noteError, setNoteError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [favoritePending, setFavoritePending] = useState(false)
+  const [notePending, setNotePending] = useState(false)
   const [revision, setRevision] = useState(0)
 
   useEffect(() => {
@@ -16,7 +33,11 @@ export function SupplierDetailsPage() {
     setLoading(true)
     setError(null)
     getSupplierDetails(id, controller.signal)
-      .then(setDetails)
+      .then((value) => {
+        if (controller.signal.aborted) return
+        setDetails(value)
+        setNoteDraft(value.note ?? '')
+      })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return
         setDetails(null)
@@ -27,18 +48,59 @@ export function SupplierDetailsPage() {
     return () => controller.abort()
   }, [id, revision])
 
+  async function toggleFavorite() {
+    if (!id || !details) return
+    setFavoritePending(true)
+    setFavoriteError(null)
+    try {
+      const response = await setSupplierFavorite(id, !details.isFavorite)
+      setDetails((current) => current ? { ...current, isFavorite: response.isFavorite } : current)
+    } catch {
+      setFavoriteError('Не удалось подтвердить изменение избранного. Обновите сведения и попробуйте ещё раз.')
+    } finally {
+      setFavoritePending(false)
+    }
+  }
+
+  async function saveNote() {
+    if (!id || !details) return
+    setNotePending(true)
+    setNoteError(null)
+    try {
+      const response = await setSupplierNote(id, noteDraft.length === 0 ? null : noteDraft)
+      setDetails((current) => current ? { ...current, note: response.note } : current)
+      setNoteDraft(response.note ?? '')
+    } catch (cause) {
+      setNoteError(cause instanceof ApiError && cause.status === 400
+        ? cause.detail ?? 'Заметка не сохранена. Проверьте её длину.'
+        : 'Не удалось сохранить заметку. Ваш текст оставлен в поле для повторной попытки.')
+    } finally {
+      setNotePending(false)
+    }
+  }
+
   if (loading) return <PageLoading label="Загружаем сведения о поставщике…" />
 
   return (
     <section className="page-content supplier-details-page">
-      <Link className="details-back-link" to="/discover">← К поиску поставщиков</Link>
+      <Link className="details-back-link" to={backTo}>← Назад к списку</Link>
       {error && <ErrorNotice title={error} action={<button className="button secondary" type="button" onClick={() => setRevision((value) => value + 1)}>Повторить</button>}>
         Проверьте подключение и попробуйте ещё раз.
       </ErrorNotice>}
       {details && <>
-        <span className="eyebrow">ПОСТАВЩИК</span>
-        <h1>{details.name.value ?? 'Название не указано'}</h1>
-        <p className="details-date">Собрано: {date(details.lastDiscoveredAt)} · Обновлено: {date(details.updatedAt)}</p>
+        <div className="supplier-details-heading">
+          <div>
+            <span className="eyebrow">ПОСТАВЩИК</span>
+            <h1>{details.name.value ?? 'Название не указано'}</h1>
+            <p className="details-date">Собрано: {formatDate(details.lastDiscoveredAt)} · Обновлено: {formatDate(details.updatedAt)}</p>
+          </div>
+          <button className={details.isFavorite ? 'favorite-button selected details-favorite' : 'favorite-button details-favorite'}
+            type="button" aria-pressed={details.isFavorite} disabled={favoritePending} onClick={() => void toggleFavorite()}>
+            <span aria-hidden="true">{details.isFavorite ? '★' : '☆'}</span>
+            <span>{favoritePending ? 'Сохраняем…' : details.isFavorite ? 'В избранном' : 'В избранное'}</span>
+          </button>
+        </div>
+        {favoriteError && <ErrorNotice title={favoriteError}>Попробуйте ещё раз.</ErrorNotice>}
 
         <Card className="details-section">
           <h2>О компании</h2>
@@ -52,7 +114,8 @@ export function SupplierDetailsPage() {
 
         <Card className="details-section">
           <h2>Контакты</h2>
-          <SourcedField label="Сайт" field={details.contacts.website} render={(value) => <SafeExternalLink className="safe-external-link" href={value}>{value}</SafeExternalLink>} />
+          <SourcedField label="Сайт" field={details.contacts.website}
+            render={(value) => <SafeExternalLink className="safe-external-link" href={value}>{value}</SafeExternalLink>} />
           <SourcedCollection title="Телефоны" values={details.contacts.phones} />
           <SourcedCollection title="Электронная почта" values={details.contacts.emails} />
         </Card>
@@ -65,7 +128,7 @@ export function SupplierDetailsPage() {
               <SourcedField label="Категория" field={product.category} />
               {product.prices.length === 0 ? <p className="details-missing">Цена: нет данных</p> : product.prices.map((price, priceIndex) => (
                 <SourcedField key={priceIndex} label="Цена" field={price.evidence}
-                  render={() => <>{price.amountMin === price.amountMax ? price.amountMin : `${price.amountMin}–${price.amountMax}`} {price.currency}/{price.unit}{price.isApproximate && ' · ориентировочно'}</>} />
+                  render={(value, isAlternative) => isAlternative ? value : <>{price.amountMin === price.amountMax ? price.amountMin : `${price.amountMin}–${price.amountMax}`} {price.currency}/{price.unit}{price.isApproximate && ' · ориентировочно'}</>} />
               ))}
             </div>
           ))}
@@ -77,7 +140,24 @@ export function SupplierDetailsPage() {
           <SourcedField label="Максимальный срок" field={details.delivery.maxDays} render={(value) => `${value} дней`} />
           <SourcedField label="Минимальный заказ" field={details.minimumOrder} render={(value) => `${value.amount} ${value.unit}`} />
           <SourcedCollection title="Сертификаты" values={details.certificates} />
-          <SourcedCollection title="Изображения" values={details.images} render={(value) => <SafeExternalLink className="safe-external-link" href={value}>Открыть изображение</SafeExternalLink>} />
+          <SourcedCollection title="Изображения" values={details.images} render={(value) => <SupplierImage value={value} />} />
+        </Card>
+
+        <Card className="details-section supplier-note-card">
+          <div className="note-heading"><div><h2>Общая заметка</h2><p>Заметку видят все пользователи этой базы.</p></div><span>{noteDraft.length}/2000</span></div>
+          <div className="form-field"><label htmlFor="supplier-note">Заметка</label>
+            <textarea id="supplier-note" className="text-input supplier-note-input" maxLength={2000} rows={5}
+              disabled={notePending}
+              value={noteDraft} onChange={(event) => { setNoteDraft(event.target.value); setNoteError(null) }}
+              placeholder="Например, связаться по поводу условий поставки" />
+          </div>
+          {noteError && <ErrorNotice title={noteError}>Проверьте текст заметки и попробуйте ещё раз.</ErrorNotice>}
+          <div className="note-actions">
+            <button className="button primary" type="button" disabled={notePending || noteDraft === (details.note ?? '')} onClick={() => void saveNote()}>
+              {notePending ? 'Сохраняем…' : 'Сохранить заметку'}
+            </button>
+            {details.note !== null && <button className="button quiet" type="button" disabled={notePending || noteDraft.length === 0} onClick={() => { setNoteDraft(''); setNoteError(null) }}>Очистить</button>}
+          </div>
         </Card>
 
         <Card className="details-section">
@@ -103,46 +183,10 @@ function SourcedCollection({ title, values, render }: {
   </div>
 }
 
-function SourcedField<T>({ label, field, render }: {
-  label?: string
-  field: SupplierSourcedValue<T>
-  render?: (value: T) => ReactNode
-}) {
-  const show = render ?? ((value: T) => String(value))
-  return <div className="details-field">
-    {label && <strong className="details-field-label">{label}</strong>}
-    {field.status === 'missing' || field.value === null ? <span className="details-missing">Нет данных</span> : <>
-      <span className="details-field-value">{show(field.value)}</span>
-      <span className={field.status === 'external' ? 'details-status external' : 'details-status official'}>
-        {field.status === 'external' ? 'Не подтверждённая информация' : 'Подтверждено официальным источником'}
-      </span>
-      {field.observedAt && <span className="details-date">Получено: {date(field.observedAt)}</span>}
-      <ul className="details-source-list">
-        {field.sources.map((source, index) => <li key={`${source.url}-${index}`}><Source source={source} /></li>)}
-      </ul>
-      {field.alternatives.length > 0 && <details className="details-alternatives">
-        <summary>Другие наблюдения: {field.alternatives.length}</summary>
-        {field.alternatives.map((alternative, index) => <div key={index} className="details-alternative">
-          <span>{show(alternative.value)}</span>
-          <span className={alternative.status === 'external' ? 'details-status external' : 'details-status official'}>
-            {alternative.status === 'external' ? 'Не подтверждённая информация' : 'Подтверждено официальным источником'}
-          </span>
-          <span className="details-date">Получено: {date(alternative.observedAt)}</span>
-          <ul className="details-source-list">{alternative.sources.map((source, sourceIndex) => <li key={`${source.url}-${sourceIndex}`}><Source source={source} /></li>)}</ul>
-        </div>)}
-      </details>}
-    </>}
-  </div>
-}
-
-function Source({ source }: { source: SupplierFactSource }) {
-  return <div className="details-source">
-    <SafeExternalLink className="safe-external-link" href={source.url}>{source.title || source.url}</SafeExternalLink>
-    <span>{source.type === 'official' ? 'Официальный' : 'Сторонний'} · {date(source.retrievedAt)}</span>
-    <p>{source.excerpt}</p>
-  </div>
-}
-
-function date(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(value)) : 'Нет данных'
+function SupplierImage({ value }: { value: string }) {
+  return <span className="supplier-image-wrap">
+    <img className="supplier-image" src={value} alt="Фотография поставщика" loading="lazy"
+      onError={(event) => { event.currentTarget.hidden = true }} />
+    <SafeExternalLink className="safe-external-link" href={value}>Открыть изображение</SafeExternalLink>
+  </span>
 }

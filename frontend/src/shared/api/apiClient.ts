@@ -206,6 +206,28 @@ export type DiscoverySearchResponse = {
 }
 
 export type SupplierFavoriteResponse = { id: string; isFavorite: boolean }
+export type SupplierNoteResponse = { id: string; note: string | null }
+export type SupplierCatalogCard = {
+  id: string
+  name: string
+  city: string | null
+  products: string[]
+  pricePreview: string | null
+  priceIsApproximate: boolean
+  deliveryPreview: string | null
+  websiteUrl: string | null
+  contactPreview: string | null
+  isFavorite: boolean
+  hasUnconfirmedData: boolean
+  lastDiscoveredAt: string | null
+}
+export type SupplierCatalogPage = {
+  items: SupplierCatalogCard[]
+  page: number
+  pageSize: number
+  totalItems: number
+  totalPages: number
+}
 
 export type SupplierFactSource = {
   url: string
@@ -326,6 +348,22 @@ export async function setSupplierFavorite(id: string, isFavorite: boolean) {
     throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
   }
   return response as SupplierFavoriteResponse
+}
+
+export async function setSupplierNote(id: string, note: string | null) {
+  const response = await apiClient.put<unknown, { note: string | null }>(
+    `/suppliers/${encodeURIComponent(id)}/note`, { note },
+  )
+  if (!isRecord(response) || typeof response.id !== 'string' ||
+    !(response.note === null || typeof response.note === 'string')) {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
+  return response as SupplierNoteResponse
+}
+
+export function getSuppliers(query: URLSearchParams, signal?: AbortSignal) {
+  const suffix = query.toString()
+  return apiClient.get<SupplierCatalogPage>(`/suppliers${suffix ? `?${suffix}` : ''}`, signal)
 }
 
 export function getSupplierDetails(id: string, signal?: AbortSignal) {

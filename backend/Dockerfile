@@ -6,7 +6,7 @@ COPY backend/Api/Goulash.Api.csproj ./backend/Api/
 COPY backend/Application/Goulash.Application.csproj ./backend/Application/
 COPY backend/Domain/Goulash.Domain.csproj ./backend/Domain/
 COPY backend/Infrastructure/Goulash.Infrastructure.csproj ./backend/Infrastructure/
-RUN dotnet restore ./backend/Goulash.sln
+RUN dotnet restore ./backend/Api/Goulash.Api.csproj
 COPY backend/ ./backend/
 RUN dotnet publish ./backend/Api/Goulash.Api.csproj --configuration Release --output /app/publish --no-restore /p:UseAppHost=false
 
