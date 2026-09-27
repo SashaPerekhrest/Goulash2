@@ -239,6 +239,7 @@ Query-параметры:
   "description": { "value": "Оптовые поставки ягод", "status": "official", "sources": [{ "url": "https://example.com/about", "title": "О компании", "excerpt": "Оптовые поставки ягод", "type": "official", "retrievedAt": "2026-09-26T10:00:00Z" }], "observedAt": "2026-09-26T10:00:00Z", "alternatives": [] },
   "address": { "value": null, "status": "missing", "sources": [], "observedAt": null, "alternatives": [] },
   "city": { "value": "Екатеринбург", "status": "official", "sources": [{ "url": "https://example.com/contacts", "title": "Контакты", "excerpt": "Наш офис: Екатеринбург", "type": "official", "retrievedAt": "2026-09-26T10:00:00Z" }], "observedAt": "2026-09-26T10:00:00Z", "alternatives": [] },
+  "region": { "value": null, "status": "missing", "sources": [], "observedAt": null, "alternatives": [] },
   "serviceRegions": [],
   "contacts": { "phones": [], "emails": [], "website": { "value": "https://example.com", "status": "official", "sources": [{ "url": "https://example.com/contacts", "title": "Контакты", "excerpt": "Официальный сайт example.com", "type": "official", "retrievedAt": "2026-09-26T10:00:00Z" }], "observedAt": "2026-09-26T10:00:00Z", "alternatives": [] } },
   "products": [],

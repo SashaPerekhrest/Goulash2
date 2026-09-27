@@ -79,13 +79,23 @@ public sealed class Supplier
         UpdatedAt = at;
     }
 
-    public void SetFavorite(bool isFavorite) => IsFavorite = isFavorite;
+    public void SetFavorite(bool isFavorite, DateTimeOffset changedAt)
+    {
+        EnsureUtc(changedAt, nameof(changedAt));
+        if (IsFavorite == isFavorite) return;
+        IsFavorite = isFavorite;
+        UpdatedAt = changedAt;
+    }
 
-    public void SetNote(string? note)
+    public void SetNote(string? note, DateTimeOffset changedAt)
     {
         if (note?.Length > 2000)
             throw new ArgumentOutOfRangeException(nameof(note), "A note cannot exceed 2000 characters.");
-        Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        EnsureUtc(changedAt, nameof(changedAt));
+        var normalized = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        if (Note == normalized) return;
+        Note = normalized;
+        UpdatedAt = changedAt;
     }
 
     private static string? NormalizeOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
