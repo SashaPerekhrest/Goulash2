@@ -70,7 +70,11 @@ async function request<T>(
   }
 
   if (response.status === 204) return undefined as T
-  return await response.json() as T
+  try {
+    return await response.json() as T
+  } catch {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
 }
 
 async function getCsrfToken(signal?: AbortSignal): Promise<string> {
@@ -163,6 +167,103 @@ export type AiSettingsCheck = {
   checkedAt: string
 }
 
+export type DiscoverySearchRequest = {
+  query: string
+  filters: {
+    city: string | null
+    region: string | null
+    category: string | null
+    product: string | null
+    price: { min: string | null; max: string | null; currency: string; unit: string } | null
+    includeApproximatePrices: boolean
+    maxDeliveryDays: number | null
+    minMinimumOrder: { amount: string; unit: string } | null
+    maxMinimumOrder: { amount: string; unit: string } | null
+  }
+}
+
+export type DiscoverySearchCard = {
+  id: string
+  name: string
+  city: string | null
+  products: string[]
+  pricePreview: string | null
+  priceIsApproximate: boolean
+  deliveryPreview: string | null
+  websiteUrl: string | null
+  contactPreview: string | null
+  isFavorite: boolean
+  hasUnconfirmedData: boolean
+  lastDiscoveredAt: string | null
+}
+
+export type DiscoverySearchResponse = {
+  discoveryId: string
+  items: DiscoverySearchCard[]
+  acceptedCount: number
+  rejectedCount: number
+  updatedExistingCount: number
+}
+
+export type SupplierFavoriteResponse = { id: string; isFavorite: boolean }
+
+export type SupplierFactSource = {
+  url: string
+  title: string | null
+  excerpt: string
+  type: 'official' | 'external'
+  retrievedAt: string
+}
+export type SupplierFactAlternative<T> = {
+  value: T
+  status: 'official' | 'external'
+  sources: SupplierFactSource[]
+  observedAt: string
+}
+export type SupplierSourcedValue<T> = {
+  value: T | null
+  status: 'official' | 'external' | 'missing'
+  sources: SupplierFactSource[]
+  observedAt: string | null
+  alternatives: SupplierFactAlternative<T>[]
+}
+export type SupplierDetails = {
+  id: string
+  name: SupplierSourcedValue<string>
+  description: SupplierSourcedValue<string>
+  address: SupplierSourcedValue<string>
+  city: SupplierSourcedValue<string>
+  region: SupplierSourcedValue<string>
+  serviceRegions: SupplierSourcedValue<string>[]
+  contacts: {
+    phones: SupplierSourcedValue<string>[]
+    emails: SupplierSourcedValue<string>[]
+    website: SupplierSourcedValue<string>
+  }
+  products: Array<{
+    name: SupplierSourcedValue<string>
+    category: SupplierSourcedValue<string>
+    prices: Array<{
+      amountMin: number
+      amountMax: number
+      currency: string
+      unit: string
+      isApproximate: boolean
+      evidence: SupplierSourcedValue<string>
+    }>
+  }>
+  delivery: { terms: SupplierSourcedValue<string>; maxDays: SupplierSourcedValue<number> }
+  minimumOrder: SupplierSourcedValue<{ amount: string; unit: string }>
+  certificates: SupplierSourcedValue<string>[]
+  images: SupplierSourcedValue<string>[]
+  sources: SupplierFactSource[]
+  isFavorite: boolean
+  note: string | null
+  createdAt: string
+  updatedAt: string
+  lastDiscoveredAt: string | null
+}
+
 export function getReadiness(signal?: AbortSignal) {
   return apiClient.get<ReadinessResponse>('/health/ready', signal)
 }
@@ -207,4 +308,57 @@ export function deleteAiApiKey() {
 
 export function checkAiSettings() {
   return apiClient.post<AiSettingsCheck>('/ai/settings/check')
+}
+
+export async function discoverSuppliers(request: DiscoverySearchRequest, signal?: AbortSignal) {
+  const response = await apiClient.post<unknown, DiscoverySearchRequest>('/discoveries', request, { signal })
+  if (!isDiscoverySearchResponse(response)) {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
+  return response
+}
+
+export async function setSupplierFavorite(id: string, isFavorite: boolean) {
+  const response = await apiClient.put<unknown, { isFavorite: boolean }>(
+    `/suppliers/${encodeURIComponent(id)}/favorite`, { isFavorite },
+  )
+  if (!isRecord(response) || typeof response.id !== 'string' || typeof response.isFavorite !== 'boolean') {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
+  return response as SupplierFavoriteResponse
+}
+
+export function getSupplierDetails(id: string, signal?: AbortSignal) {
+  return apiClient.get<SupplierDetails>(`/suppliers/${encodeURIComponent(id)}`, signal)
+}
+
+function isDiscoverySearchResponse(value: unknown): value is DiscoverySearchResponse {
+  if (!isRecord(value) || typeof value.discoveryId !== 'string' || !value.discoveryId ||
+    !Array.isArray(value.items) || value.items.length > 5 ||
+    !isNonNegativeInteger(value.acceptedCount) || value.acceptedCount !== value.items.length ||
+    !isNonNegativeInteger(value.rejectedCount) || !isNonNegativeInteger(value.updatedExistingCount) ||
+    value.updatedExistingCount > value.acceptedCount) return false
+
+  return value.items.every((item) => isRecord(item) &&
+    typeof item.id === 'string' && item.id.length > 0 &&
+    typeof item.name === 'string' && item.name.trim().length > 0 &&
+    (item.city === null || typeof item.city === 'string') &&
+    Array.isArray(item.products) && item.products.every((product) => typeof product === 'string') &&
+    (item.pricePreview === null || typeof item.pricePreview === 'string') &&
+    typeof item.priceIsApproximate === 'boolean' &&
+    (item.deliveryPreview === null || typeof item.deliveryPreview === 'string') &&
+    (item.websiteUrl === null || typeof item.websiteUrl === 'string') &&
+    (item.contactPreview === null || typeof item.contactPreview === 'string') &&
+    typeof item.isFavorite === 'boolean' && typeof item.hasUnconfirmedData === 'boolean' &&
+    (item.lastDiscoveredAt === null || (typeof item.lastDiscoveredAt === 'string' &&
+      Number.isFinite(Date.parse(item.lastDiscoveredAt))))
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }

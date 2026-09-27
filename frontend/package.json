@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
-    "test": "node --test tests/api-client.test.mjs",
+    "test": "node --test tests/api-client.test.mjs tests/discovery-decimal.test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
