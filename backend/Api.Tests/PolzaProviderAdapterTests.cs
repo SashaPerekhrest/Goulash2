@@ -2,107 +2,85 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Goulash.Api.Providers;
-using Goulash.Application;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Goulash.Api.Tests;
 
 public sealed class PolzaProviderAdapterTests
 {
-    [Theory]
-    [InlineData("openai/gpt-4o", true)]
-    [InlineData("vendor/model-v2.1", true)]
-    [InlineData("gpt-4o", false)]
-    [InlineData("vendor/", false)]
-    [InlineData("vendor/model/extra", false)]
-    [InlineData("https://example.com/model", false)]
-    [InlineData("vendor/model with spaces", false)]
-    public void SupportsOnlySafePolzaModelIds(string model, bool expected)
+    [Fact]
+    public async Task SearchPassesExactStrictProfileSchemaAndUsesExaWebSearch()
     {
-        var adapter = CreateAdapter(new RecordingHandler());
-        Assert.Equal(expected, adapter.SupportsModel(model));
+        var handler = new RecordingHandler();
+        var adapter = new PolzaProviderAdapter(new StaticHttpClientFactory(new HttpClient(handler)));
+        var schema = SupplierDiscoveryJson.BuildProfileSchema();
+
+        await adapter.SearchAsync("vendor/model", "test-key", null, "system", "return JSON", "berry supplier",
+            CancellationToken.None, schema);
+
+        using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
+        var root = body.RootElement;
+        var format = root.GetProperty("response_format");
+        Assert.Equal("json_schema", format.GetProperty("type").GetString());
+        Assert.Equal("supplier_discovery_response", format.GetProperty("json_schema").GetProperty("name").GetString());
+        Assert.True(format.GetProperty("json_schema").GetProperty("strict").GetBoolean());
+        using var expectedSchema = JsonDocument.Parse(JsonSerializer.Serialize(schema,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(expectedSchema.RootElement.GetRawText(),
+            format.GetProperty("json_schema").GetProperty("schema").GetRawText());
+        Assert.Equal("web", root.GetProperty("plugins")[0].GetProperty("id").GetString());
+        Assert.Equal("exa", root.GetProperty("plugins")[0].GetProperty("engine").GetString());
+        Assert.Equal("berry supplier", root.GetProperty("plugins")[0].GetProperty("search_prompt").GetString());
     }
 
     [Fact]
-    public async Task DiscoveryUsesOneSearchRequestAndPassesOptionalRoute()
+    public async Task LeadSearchPassesExactLeadSchema()
     {
-        const string sourceUrl = "https://alphafoods.com/about";
-        const string excerpt = "Supplier Alpha is a food supplier based in Yekaterinburg.";
-        var candidate = new
-        {
-            name = "Supplier Alpha",
-            nameSourceUrl = sourceUrl,
-            websiteUrl = (string?)null,
-            websiteSourceUrl = (string?)null,
-            facts = Array.Empty<object>()
-        };
-        var searchResponse = JsonSerializer.Serialize(new
-        {
-            choices = new[]
-            {
-                new
-                {
-                    message = new
-                    {
-                        content = JsonSerializer.Serialize(new { suppliers = new[] { candidate } }),
-                        annotations = new[]
-                        {
-                            new
-                            {
-                                type = "url_citation",
-                                url_citation = new { url = sourceUrl, title = "About Alpha Foods", content = excerpt }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        var handler = new RecordingHandler(searchResponse);
-        var adapter = CreateAdapter(handler);
+        var handler = new RecordingHandler();
+        var adapter = new PolzaProviderAdapter(new StaticHttpClientFactory(new HttpClient(handler)));
+        var schema = SupplierDiscoveryJson.BuildLeadSchema();
 
-        const string customPrompt = "Prefer suppliers with a warehouse in the selected city.";
-        var result = await new SupplierDiscoveryService(NullLogger<SupplierDiscoveryService>.Instance)
-            .DiscoverAsync(adapter, "openai/gpt-4o", "test-key", "OpenAI", customPrompt,
-                "food suppliers in Yekaterinburg", new SupplierDiscoveryFilters(City: "Yekaterinburg"), 5,
-                CancellationToken.None);
+        await adapter.SearchAsync("vendor/model", "test-key", null, "system", "lead JSON", "berry supplier",
+            CancellationToken.None, schema);
 
-        Assert.Single(result.Candidates);
-        Assert.Equal("Supplier Alpha", result.Candidates[0].Name);
-        Assert.Single(handler.RequestBodies);
-        using var search = JsonDocument.Parse(handler.RequestBodies[0]);
-        var searchRoot = search.RootElement;
-        Assert.Equal("exa", searchRoot.GetProperty("plugins")[0].GetProperty("engine").GetString());
-        Assert.DoesNotContain("fieldKey", searchRoot.GetProperty("plugins")[0].GetProperty("search_prompt").GetString());
-        Assert.False(searchRoot.TryGetProperty("response_format", out _));
-        Assert.Equal("OpenAI", searchRoot.GetProperty("provider").GetProperty("only")[0].GetString());
-        Assert.Equal(customPrompt, searchRoot.GetProperty("messages")[0].GetProperty("content").GetString());
-        Assert.Contains("food suppliers in Yekaterinburg", searchRoot.GetProperty("messages")[1].GetProperty("content").GetString());
+        using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
+        var expectedSchema = JsonSerializer.Serialize(schema, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var actualSchema = body.RootElement.GetProperty("response_format").GetProperty("json_schema")
+            .GetProperty("schema").GetRawText();
+        Assert.Equal(expectedSchema, actualSchema);
     }
 
-    private static PolzaProviderAdapter CreateAdapter(RecordingHandler handler) =>
-        new(new StaticHttpClientFactory(new HttpClient(handler)));
+    [Fact]
+    public async Task ProfileSearchRestrictsWebPluginToSupplierDomain()
+    {
+        var handler = new RecordingHandler();
+        var adapter = new PolzaProviderAdapter(new StaticHttpClientFactory(new HttpClient(handler)));
+
+        await adapter.SearchAsync("vendor/model", "test-key", null, "system", "profile JSON", "Acme",
+            CancellationToken.None, searchDomains: ["acme.com"]);
+
+        using var body = JsonDocument.Parse(Assert.Single(handler.RequestBodies));
+        Assert.Contains("site:acme.com", body.RootElement.GetProperty("plugins")[0]
+            .GetProperty("search_prompt").GetString());
+    }
 
     private sealed class StaticHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => client;
     }
 
-    private sealed class RecordingHandler(params string[] responseBodies) : HttpMessageHandler
+    private sealed class RecordingHandler : HttpMessageHandler
     {
-        private readonly Queue<string> _responseBodies = new(responseBodies);
         public List<string> RequestBodies { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
-            if (_responseBodies.Count == 0)
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
-
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_responseBodies.Dequeue(), Encoding.UTF8, "application/json")
+                Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"{\\\"suppliers\\\":[]}\"}}]}",
+                    Encoding.UTF8, "application/json")
             };
         }
     }

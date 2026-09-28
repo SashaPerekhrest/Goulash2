@@ -229,7 +229,7 @@ export function SuppliersPage() {
               <div className="discovery-card-heading">
                 <div><h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>{item.name}</Link></h3>
                   <p className="discovery-card-location">{item.city ?? 'Город не указан'}</p></div>
-                {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть неподтверждённые сведения</span>}
+                {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть сведения, извлечённые моделью</span>}
               </div>
               <div className="discovery-products" aria-label="Товары">
                 {item.products.length > 0 ? item.products.map((product, index) => <span className="product-chip" key={`${product}-${index}`}>{product}</span>) : <span className="catalog-no-products">Товары не указаны</span>}

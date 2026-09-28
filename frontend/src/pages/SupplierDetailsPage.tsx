@@ -138,7 +138,8 @@ export function SupplierDetailsPage() {
           <h2>Условия поставки</h2>
           <SourcedField label="Доставка" field={details.delivery.terms} />
           <SourcedField label="Максимальный срок" field={details.delivery.maxDays} render={(value) => `${value} дней`} />
-          <SourcedField label="Минимальный заказ" field={details.minimumOrder} render={(value) => `${value.amount} ${value.unit}`} />
+          <SourcedField label="Минимальный заказ" field={details.minimumOrder} render={(value) =>
+            [ [value.amount, value.unit].filter(Boolean).join(' '), value.details ].filter(Boolean).join(' · ')} />
           <SourcedCollection title="Сертификаты" values={details.certificates} />
           <SourcedCollection title="Изображения" values={details.images} render={(value) => <SupplierImage value={value} />} />
         </Card>

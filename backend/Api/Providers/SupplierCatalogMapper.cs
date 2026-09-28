@@ -45,7 +45,7 @@ public sealed record SupplierPriceDetails(
     SourcedValue<string> Evidence);
 
 public sealed record SupplierDeliveryDetails(SourcedValue<string> Terms, SourcedValue<decimal?> MaxDays);
-public sealed record SupplierMinimumOrderValue(string Amount, string Unit);
+public sealed record SupplierMinimumOrderValue(string? Amount, string? Unit, string? Details);
 
 internal static class SupplierCatalogMapper
 {
@@ -129,7 +129,7 @@ internal static class SupplierCatalogMapper
         var currentFacts = supplier.Facts.Where(fact => fact.IsCurrent).ToArray();
         var price = supplier.Products.SelectMany(product => product.Prices)
             .Where(item => item.Fact.IsCurrent)
-            .OrderBy(item => item.Fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(item => StatusPriority(item.Fact.Status))
             .ThenBy(item => item.IsApproximate ? 1 : 0)
             .ThenBy(item => item.AmountMin)
             .ThenBy(item => item.Fact.ObservedAt)
@@ -155,10 +155,10 @@ internal static class SupplierCatalogMapper
         var contact = contactFact is null ? null : ReadString(contactFact.ValueJson);
         var city = cityFact is null ? supplier.City : ReadString(cityFact.ValueJson);
         var hasUnconfirmedData = currentFacts.Any(fact => fact.FieldKey == "name" &&
-                fact.Status == VerificationStatus.External) ||
-            productFacts.Any(fact => fact.Status == VerificationStatus.External) ||
+                fact.Status != VerificationStatus.Official) ||
+            productFacts.Any(fact => fact.Status != VerificationStatus.Official) ||
             new[] { cityFact, websiteFact, contactFact, price?.Fact, delivery.Fact }
-                .Any(fact => fact?.Status == VerificationStatus.External);
+                .Any(fact => fact is not null && fact.Status != VerificationStatus.Official);
 
         return new SupplierCatalogCard(supplier.Id, supplier.Name, city, products,
             pricePreview, price?.IsApproximate ?? false,
@@ -211,7 +211,7 @@ internal static class SupplierCatalogMapper
                 fact.ItemKey == product.ItemKey).ToArray();
 
         var prices = product.Prices.Where(price => price.Fact.IsCurrent)
-            .OrderBy(price => price.Fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(price => StatusPriority(price.Fact.Status))
             .ThenBy(price => price.AmountMin)
             .ThenBy(price => price.Fact.ObservedAt)
             .Select(price => new SupplierPriceDetails(price.AmountMin, price.AmountMax, price.Currency,
@@ -234,7 +234,7 @@ internal static class SupplierCatalogMapper
             .Select(group => BuildSourcedValue(allFacts.Where(fact => fact.ItemKey == group.Key), ReadStringValue))
             .Where(value => value.Status != FactStatus.Missing)
             .GroupBy(value => value.Value, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderBy(value => value.Status == FactStatus.Official ? 0 : 1)
+            .Select(group => group.OrderBy(value => StatusPriority(value.Status))
                 .ThenByDescending(value => value.ObservedAt).First())
             .ToArray();
     }
@@ -243,7 +243,7 @@ internal static class SupplierCatalogMapper
     {
         var allFacts = candidates.ToArray();
         var current = allFacts.Where(fact => fact.IsCurrent)
-            .OrderBy(fact => fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(fact => StatusPriority(fact.Status))
             .ThenByDescending(fact => fact.ObservedAt)
             .ToArray();
         SupplierFact? selected = null;
@@ -262,7 +262,7 @@ internal static class SupplierCatalogMapper
         var serializedSelected = JsonSerializer.Serialize(selectedValue, JsonOptions);
         var alternatives = new List<FactAlternative<T>>();
         foreach (var fact in allFacts.Where(fact => fact.Id != selected.Id)
-                     .OrderBy(fact => fact.Status == VerificationStatus.Official ? 0 : 1)
+                     .OrderBy(fact => StatusPriority(fact.Status))
                      .ThenByDescending(fact => fact.ObservedAt))
         {
             var value = readValue(fact.ValueJson);
@@ -279,7 +279,7 @@ internal static class SupplierCatalogMapper
         var value = ReadPriceEvidenceText(fact);
         if (string.IsNullOrWhiteSpace(value)) return SourcedValue<string>.Missing;
         var alternatives = candidates.Where(candidate => candidate.Id != fact.Id)
-            .OrderBy(candidate => candidate.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(candidate => StatusPriority(candidate.Status))
             .ThenByDescending(candidate => candidate.ObservedAt)
             .Select(candidate => (Fact: candidate, Value: ReadPriceEvidenceText(candidate)))
             .Where(item => !string.IsNullOrWhiteSpace(item.Value) && item.Value != value)
@@ -310,9 +310,14 @@ internal static class SupplierCatalogMapper
     private static SupplierMinimumOrderValue? ReadMinimumOrder(string valueJson)
     {
         using var document = JsonDocument.Parse(valueJson);
+        if (document.RootElement.ValueKind == JsonValueKind.String)
+            return new SupplierMinimumOrderValue(null, null, document.RootElement.GetString());
+        if (document.RootElement.ValueKind == JsonValueKind.Number)
+            return new SupplierMinimumOrderValue(null, null, document.RootElement.GetRawText());
         if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
         string? amount = null;
         string? unit = null;
+        string? details = null;
         foreach (var property in document.RootElement.EnumerateObject())
         {
             if (property.Name.Equals("amount", StringComparison.OrdinalIgnoreCase))
@@ -324,13 +329,15 @@ internal static class SupplierCatalogMapper
                 };
             else if (property.Name.Equals("unit", StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.String)
                 unit = property.Value.GetString();
+            else if (property.Name.Equals("details", StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.String)
+                details = property.Value.GetString();
         }
-        if (string.IsNullOrWhiteSpace(amount) || string.IsNullOrWhiteSpace(unit)) return null;
+        if (string.IsNullOrWhiteSpace(amount) && string.IsNullOrWhiteSpace(unit) && string.IsNullOrWhiteSpace(details)) return null;
         if (decimal.TryParse(amount, NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite |
                 NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
                 CultureInfo.InvariantCulture, out var parsed))
             amount = parsed.ToString("G29", CultureInfo.InvariantCulture);
-        return new SupplierMinimumOrderValue(amount, unit);
+        return new SupplierMinimumOrderValue(amount, unit, details);
     }
 
     private static decimal? ReadNullableDecimal(string valueJson) =>
@@ -360,7 +367,7 @@ internal static class SupplierCatalogMapper
         using var document = JsonDocument.Parse(fact.NormalizedValueJson);
         var value = document.RootElement;
         if (value.ValueKind != JsonValueKind.Object || !TryGet(value, "amount", out var amountValue) ||
-            !SupplierDiscoveryMatcher.TryDecimal(amountValue, out var amount) || amount < 0 ||
+            !SupplierFactNormalizer.TryDecimal(amountValue, out var amount) || amount < 0 ||
             !TryGet(value, "unit", out var unitValue) || unitValue.ValueKind != JsonValueKind.String ||
             !string.Equals(SupplierFactNormalizer.NormalizeUnit(unitValue.GetString() ?? string.Empty),
                 filters.MinimumOrderUnit, StringComparison.OrdinalIgnoreCase)) return false;
@@ -385,11 +392,11 @@ internal static class SupplierCatalogMapper
         approximate = approximateValue.GetBoolean();
         var hasMin = TryGet(value, "amountMin", out var minValue);
         var hasMax = TryGet(value, "amountMax", out var maxValue);
-        if (hasMin && hasMax && SupplierDiscoveryMatcher.TryDecimal(minValue, out minimum) &&
-            SupplierDiscoveryMatcher.TryDecimal(maxValue, out maximum))
+        if (hasMin && hasMax && SupplierFactNormalizer.TryDecimal(minValue, out minimum) &&
+            SupplierFactNormalizer.TryDecimal(maxValue, out maximum))
             return minimum >= 0 && maximum >= minimum;
         if (!hasMin && !hasMax && TryGet(value, "amount", out var amountValue) &&
-            SupplierDiscoveryMatcher.TryDecimal(amountValue, out var amount) && amount >= 0)
+            SupplierFactNormalizer.TryDecimal(amountValue, out var amount) && amount >= 0)
         {
             minimum = maximum = amount;
             return true;
@@ -400,7 +407,7 @@ internal static class SupplierCatalogMapper
     private static bool TryReadDecimal(string valueJson, out decimal number)
     {
         using var document = JsonDocument.Parse(valueJson);
-        return SupplierDiscoveryMatcher.TryDecimal(document.RootElement, out number);
+        return SupplierFactNormalizer.TryDecimal(document.RootElement, out number);
     }
 
     private static bool MatchesFactTerm(string? expected, IEnumerable<SupplierFact> facts, string? fallback = null)
@@ -458,7 +465,7 @@ internal static class SupplierCatalogMapper
 
     private static SupplierFact? CurrentStringFact(IEnumerable<SupplierFact> facts, string fieldKey) =>
         facts.Where(fact => fact.FieldKey == fieldKey && fact.IsCurrent)
-            .OrderBy(fact => fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(fact => StatusPriority(fact.Status))
             .ThenByDescending(fact => fact.ObservedAt)
             .FirstOrDefault(fact => !string.IsNullOrWhiteSpace(ReadString(fact.ValueJson)));
 
@@ -483,8 +490,26 @@ internal static class SupplierCatalogMapper
     private static FactEvidence ToEvidence(SupplierSource source) =>
         new(source.Url, source.Title, source.Excerpt, source.Type, source.RetrievedAt);
 
-    private static FactStatus ToStatus(VerificationStatus status) => status == VerificationStatus.Official
-        ? FactStatus.Official : FactStatus.External;
+    private static FactStatus ToStatus(VerificationStatus status) => status switch
+    {
+        VerificationStatus.Official => FactStatus.Official,
+        VerificationStatus.External => FactStatus.External,
+        _ => FactStatus.AiGenerated
+    };
+
+    private static int StatusPriority(VerificationStatus status) => status switch
+    {
+        VerificationStatus.AiGenerated => 0,
+        VerificationStatus.Official => 1,
+        _ => 2
+    };
+
+    private static int StatusPriority(FactStatus status) => status switch
+    {
+        FactStatus.AiGenerated => 0,
+        FactStatus.Official => 1,
+        _ => 2
+    };
 
     private static bool TryGet(JsonElement value, string name, out JsonElement result)
     {

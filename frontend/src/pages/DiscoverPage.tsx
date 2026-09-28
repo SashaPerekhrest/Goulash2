@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import {
   ApiError,
   discoverSuppliers,
+  getDiscoveryStatus,
   getAiSettings,
   setSupplierFavorite,
   type AiSettings,
@@ -65,7 +66,7 @@ export function DiscoverPage() {
   const [settingsError, setSettingsError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [filtersExpanded, setFiltersExpanded] = useState(false)
-  const [searchCancelled, setSearchCancelled] = useState(false)
+  const [jobProgress, setJobProgress] = useState<{ stage: string; completed: number; total: number }>({ stage: 'queued', completed: 0, total: 0 })
   const [failure, setFailure] = useState<DiscoveryFailure | null>(null)
   const [response, setResponse] = useState<DiscoverySearchResponse | null>(null)
   const [resultSnapshot, setResultSnapshot] = useState<SearchSnapshot | null>(null)
@@ -125,12 +126,28 @@ export function DiscoverPage() {
     setLoading(true)
     setFailure(null)
     setFavoriteError(false)
-    setSearchCancelled(false)
+    setJobProgress({ stage: 'queued', completed: 0, total: 0 })
     setLastRunSnapshot(snapshot)
 
-    void discoverSuppliers(snapshot.request, controller.signal)
+    void (async (): Promise<DiscoverySearchResponse | null> => {
+      const accepted = await discoverSuppliers(snapshot.request, controller.signal)
+      let job = await getDiscoveryStatus(accepted.discoveryId, controller.signal)
+      while (job.status === 'queued' || job.status === 'running') {
+        if (!mountedRef.current || controller.signal.aborted) return null
+        setJobProgress({ stage: job.stage, completed: job.completedCandidates, total: job.candidateCount })
+        await new Promise((resolve) => window.setTimeout(resolve, 1200))
+        job = await getDiscoveryStatus(accepted.discoveryId, controller.signal)
+      }
+      if (job.status === 'failed') {
+        const status = job.errorCode === 'PROVIDER_TIMEOUT' ? 504 :
+          job.errorCode === 'PROVIDER_NOT_CONFIGURED' ? 409 : 502
+        throw new ApiError('Поиск не завершился', status, job.errorCode ?? 'PROVIDER_UNAVAILABLE')
+      }
+      if (!job.result) throw new ApiError('Сервер не вернул результаты поиска', 502, 'INVALID_RESPONSE')
+      return job.result
+    })()
       .then((result) => {
-        if (!mountedRef.current || controller.signal.aborted) return
+        if (result === null || !mountedRef.current || controller.signal.aborted) return
         setResponse(result)
         setResultSnapshot(snapshot)
       })
@@ -154,15 +171,6 @@ export function DiscoverPage() {
   function repeatLastSearch() {
     if (!lastRunSnapshot || !canSearchRef.current) return
     startSearch(lastRunSnapshot)
-  }
-
-  function cancelSearch() {
-    const activeSearch = activeSearchRef.current
-    if (!activeSearch) return
-    activeSearchRef.current = null
-    activeSearch.controller.abort()
-    setLoading(false)
-    setSearchCancelled(true)
   }
 
   async function toggleFavorite(id: string, currentValue: boolean) {
@@ -201,7 +209,7 @@ export function DiscoverPage() {
       <div className="page-heading">
         <div>
           <h1>Найдите тех, кто поставляет нужное</h1>
-          <p className="lead">Поиск обращается к веб-источникам и сохраняет подтверждённые сведения в базе поставщиков.</p>
+          <p className="lead">Сначала поиск находит компании, затем отдельно исследует сайты и собирает подробные профили.</p>
         </div>
       </div>
 
@@ -349,13 +357,7 @@ export function DiscoverPage() {
             <button className="button primary" type="submit" disabled={!canSubmitCurrent}>
               Найти
             </button>
-            {loading && (
-              <button className="button secondary" type="button" onClick={cancelSearch}>
-                Отмена
-              </button>
-            )}
-            {loading && <LoadingIndicator label="Ищем поставщиков…" />}
-            {searchCancelled && <span className="search-cancelled" role="status">Поиск отменён.</span>}
+            {loading && <LoadingIndicator label={jobProgress.stage === 'enriching' ? 'Исследуем сайты поставщиков…' : 'Ищем компании…'} />}
           </div>
         </form>
       </Card>
@@ -364,8 +366,10 @@ export function DiscoverPage() {
         <Card className="discover-running-card">
           <div aria-live="polite" role="status">
             <div className="discover-running-heading">
-              <LoadingIndicator label="Ищем поставщиков…" />
-              <span>Запущенный поиск</span>
+              <LoadingIndicator label={jobProgress.stage === 'enriching' ? 'Исследуем сайты поставщиков…' : 'Ищем компании…'} />
+              <span>{jobProgress.stage === 'enriching' && jobProgress.total > 0
+                ? `Исследовано ${jobProgress.completed} из ${jobProgress.total} сайтов`
+                : 'Поиск выполняется на сервере'}</span>
             </div>
             <SearchParameters snapshot={lastRunSnapshot} />
           </div>
@@ -399,15 +403,20 @@ export function DiscoverPage() {
           <div className="discover-results-heading">
             <div>
               <span className="section-kicker">РЕЗУЛЬТАТЫ ПОИСКА</span>
-              <h2>{response.items.length === 0 ? 'Подходящие поставщики не найдены' : 'Найденные поставщики'}</h2>
+              <h2>{response.items.length === 0 ? 'Поставщики не найдены' : 'Найденные поставщики'}</h2>
               <p>Параметры именно этого запуска:</p>
             </div>
-            <span className="discover-result-count">{response.acceptedCount} из 5</span>
+            <span className="discover-result-count">{response.acceptedCount} найдено</span>
           </div>
           <SearchParameters snapshot={resultSnapshot} />
-          {response.rejectedCount > 0 && (
+          {response.timeLimitReached && (
             <p className="discover-rejected-count" role="status">
-              Не показано записей, которые не прошли проверку или условия: {response.rejectedCount}.
+              Поиск завершён по лимиту в 2 минуты. Показаны поставщики, которых удалось обработать к этому моменту.
+            </p>
+          )}
+          {response.failedProfileCount > 0 && (
+            <p className="discover-rejected-count" role="status">
+              Для {response.failedProfileCount} поставщиков не удалось получить полный профиль. Показаны данные из первичного поиска.
             </p>
           )}
 
@@ -415,13 +424,9 @@ export function DiscoverPage() {
             <Card className="discover-empty-results">
               <EmptyState
                 title="Попробуйте уточнить условия"
-                description={response.outcome === 'no_sources'
-                  ? 'Провайдер не вернул проверяемые веб-источники. Попробуйте повторить поиск или сменить модель.'
-                  : response.outcome === 'model_empty'
-                    ? 'Веб-источники найдены, но модель не выделила из них поставщиков. Попробуйте уточнить запрос.'
-                    : response.rejectedCount > 0
-                      ? 'Найденные записи не прошли проверку источников или заданные фильтры.'
-                      : 'Подходящие компании не найдены.'}
+                description={response.outcome === 'profiles_failed'
+                  ? 'Поставщики найдены, но профили сайтов не удалось получить. Попробуйте повторить поиск.'
+                  : 'Первый поисковый запрос не вернул поставщиков по этим условиям.'}
               />
             </Card>
           ) : (
@@ -434,7 +439,7 @@ export function DiscoverPage() {
                         <h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>{item.name}</Link></h3>
                         <p className="discovery-card-location">{item.city ?? 'Местоположение не указано'}</p>
                       </div>
-                      {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть неподтверждённые сведения</span>}
+                      {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть сведения, извлечённые моделью</span>}
                     </div>
 
                     {item.products.length > 0 && (

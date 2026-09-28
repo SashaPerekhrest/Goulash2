@@ -6,9 +6,18 @@ using System.Text.RegularExpressions;
 
 namespace Goulash.Application;
 
-/// <summary>Normalizes values used for filtering while retaining the original provider value for evidence/audit.</summary>
+/// <summary>Normalizes values used for catalog filtering while retaining the original provider profile value.</summary>
 public static partial class SupplierFactNormalizer
 {
+    public static bool TryDecimal(JsonElement value, out decimal number)
+    {
+        number = default;
+        if (value.ValueKind == JsonValueKind.Number) return value.TryGetDecimal(out number);
+        return value.ValueKind == JsonValueKind.String &&
+            decimal.TryParse(value.GetString(), NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite |
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out number);
+    }
+
     public static JsonElement Normalize(string fieldKey, JsonElement original)
     {
         if (original.ValueKind == JsonValueKind.Object)
@@ -26,7 +35,7 @@ public static partial class SupplierFactNormalizer
                 JsonSerializer.SerializeToElement(value.ToLowerInvariant()),
             "phone" => JsonSerializer.SerializeToElement(NormalizePhone(value)),
             "email" => JsonSerializer.SerializeToElement(value.ToLowerInvariant()),
-            "website" or "image" => SupplierDiscoveryEvidencePolicy.TryNormalizeHttpUrl(value, out var url)
+            "website" or "image" => SupplierDiscoverySourcePolicy.TryNormalizeHttpUrl(value, out var url)
                 ? JsonSerializer.SerializeToElement(url.AbsoluteUri)
                 : JsonSerializer.SerializeToElement(value),
             "delivery_days" => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) && days >= 0

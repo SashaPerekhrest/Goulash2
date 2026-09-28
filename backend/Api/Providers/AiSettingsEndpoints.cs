@@ -93,6 +93,7 @@ public static class AiSettingsEndpoints
 
         var routeProvider = string.IsNullOrWhiteSpace(request.RouteProvider) ? null : request.RouteProvider.Trim();
         if (routeProvider is { Length: > 120 } || routeProvider?.Any(char.IsControl) == true ||
+            routeProvider?.IndexOfAny(['@', '&', '=']) >= 0 ||
             (routeProvider is not null && !provider.SupportsProviderRouting))
             return ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
                 "Провайдер маршрутизации не поддерживается или указан некорректно", "VALIDATION_ERROR");
@@ -157,7 +158,6 @@ public static class AiSettingsEndpoints
         ApplicationDbContext db,
         IAiProviderRegistry registry,
         AiApiKeyProtector keyProtector,
-        SupplierDiscoveryService discoveryService,
         HttpContext context,
         CancellationToken cancellationToken)
     {
@@ -167,7 +167,7 @@ public static class AiSettingsEndpoints
             return ProblemResponses.Create(context, StatusCodes.Status409Conflict,
                 "Сначала выберите провайдера и сохраните API-ключ", "PROVIDER_NOT_CONFIGURED");
 
-        var provider = registry.FindWebSearchProvider(setting.ProviderId) as IAiSearchTransport;
+        var provider = registry.FindWebSearchProvider(setting.ProviderId);
         if (provider is null)
             return ProblemResponses.Create(context, StatusCodes.Status502BadGateway,
                 "Сохранённый адаптер провайдера недоступен на сервере", "PROVIDER_UNAVAILABLE");
@@ -175,12 +175,8 @@ public static class AiSettingsEndpoints
         try
         {
             var apiKey = keyProtector.Unprotect(setting.EncryptedApiKey);
-            var prompt = await db.AiProviderPromptSettings.AsNoTracking()
-                .SingleOrDefaultAsync(item => item.ProviderId == "discovery", cancellationToken);
-            var result = await discoveryService.DiscoverAsync(provider, setting.Model, apiKey, setting.RouteProvider,
-                prompt?.Prompt ?? AiProviderPromptDefaults.Shared, "поставщик продуктов питания оптом",
-                new SupplierDiscoveryFilters(), 1, cancellationToken);
-            if (result.EvidenceCount == 0)
+            var result = await provider.CheckConnectionAsync(setting.Model, apiKey, setting.RouteProvider, cancellationToken);
+            if (!result.Connected || !result.WebSearchAvailable)
                 return ProblemResponses.Create(context, StatusCodes.Status502BadGateway,
                     "Провайдер не вернул проверяемые веб-источники", "PROVIDER_UNAVAILABLE");
 

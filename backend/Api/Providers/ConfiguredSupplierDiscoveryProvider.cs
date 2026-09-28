@@ -14,7 +14,7 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
     SupplierDiscoveryService discoveryService) : ISupplierDiscoveryProvider
 {
     public async Task<SupplierDiscoveryResult> DiscoverAsync(string query, SupplierDiscoveryFilters filters, int limit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Func<SupplierDiscoveryProgress, Task>? progress = null)
     {
         var setting = await db.AiProviderSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == AiProviderSetting.SingletonId, cancellationToken);
@@ -41,6 +41,6 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
         }
 
         return await discoveryService.DiscoverAsync(adapter, setting.Model, apiKey, setting.RouteProvider,
-            basePrompt, query, filters, limit, cancellationToken);
+            basePrompt, query, filters, limit, cancellationToken, progress);
     }
 }

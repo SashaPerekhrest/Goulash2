@@ -16,11 +16,12 @@
     <Compile Include="..\Api\Providers\PolzaProviderAdapter.cs" Link="Production\PolzaProviderAdapter.cs" />
     <Compile Include="..\Api\Providers\AiSearchHttpClient.cs" Link="Production\AiSearchHttpClient.cs" />
     <Compile Include="..\Api\Providers\SupplierDiscoveryService.cs" Link="Production\SupplierDiscoveryService.cs" />
-    <Compile Include="..\Api\Providers\SupplierDiscoveryResponseParser.cs" Link="Production\SupplierDiscoveryResponseParser.cs" />
+    <Compile Include="..\Api\Providers\SupplierDiscoveryJson.cs" Link="Production\SupplierDiscoveryJson.cs" />
+    <Compile Include="..\Api\Providers\SupplierDiscoveryModels.cs" Link="Production\SupplierDiscoveryModels.cs" />
+    <Compile Include="..\Api\Providers\SupplierSiteResearcher.cs" Link="Production\SupplierSiteResearcher.cs" />
     <Compile Include="..\Application\IAiProviderAdapter.cs" Link="Production\IAiProviderAdapter.cs" />
     <Compile Include="..\Application\AiProviderPromptDefaults.cs" Link="Production\AiProviderPromptDefaults.cs" />
-    <Compile Include="..\Application\SupplierDiscoveryEvidencePolicy.cs" Link="Production\SupplierDiscoveryEvidencePolicy.cs" />
-    <Compile Include="..\Application\SupplierDiscoveryMatcher.cs" Link="Production\SupplierDiscoveryMatcher.cs" />
+    <Compile Include="..\Application\SupplierDiscoverySourcePolicy.cs" Link="Production\SupplierDiscoverySourcePolicy.cs" />
     <Compile Include="..\Application\SupplierFactNormalizer.cs" Link="Production\SupplierFactNormalizer.cs" />
     <Compile Include="..\Application\SupplierIdentity.cs" Link="Production\SupplierIdentity.cs" />
     <Compile Include="..\Domain\AiProviderSetting.cs" Link="Production\AiProviderSetting.cs" />

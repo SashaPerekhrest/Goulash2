@@ -273,8 +273,8 @@ export function IntegrationSettingsPage() {
               {selectedProvider?.supportsProviderRouting && (
                 <FormField
                   id="route-provider"
-                  label="Маршрут-провайдер (необязательно)"
-                  hint="Точное название провайдера из каталога Polza. Если оставить пустым, Polza выберет маршрут автоматически."
+                  label="Провайдер модели (необязательно)"
+                  hint="Добавляется к модели в формате @provider=… . Оставьте пустым для автоматического выбора Polza."
                 >
                   <input
                     id="route-provider"
@@ -288,7 +288,7 @@ export function IntegrationSettingsPage() {
                       setFormError(null)
                       setCheckState(null)
                     }}
-                    placeholder="Например, OpenAI"
+                    placeholder="Например, DeepInfra"
                     disabled={saving || deleting || checking}
                   />
                 </FormField>

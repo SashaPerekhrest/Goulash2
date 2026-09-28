@@ -98,7 +98,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         var entity = modelBuilder.Entity<SupplierFact>();
         entity.ToTable("supplier_facts", table =>
         {
-            table.HasCheckConstraint("ck_supplier_facts_status", "verification_status IN ('official', 'external')");
+            table.HasCheckConstraint("ck_supplier_facts_status", "verification_status IN ('official', 'external', 'ai_generated')");
             table.HasCheckConstraint("ck_supplier_facts_value_object", "jsonb_typeof(value_json) <> 'null'");
         });
         entity.HasKey(item => item.Id);
@@ -234,8 +234,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         var entity = modelBuilder.Entity<DiscoveryRun>();
         entity.ToTable("discovery_runs", table =>
         {
-            table.HasCheckConstraint("ck_discovery_runs_status", "status IN ('running', 'succeeded', 'failed')");
-            table.HasCheckConstraint("ck_discovery_runs_counts", "accepted_count >= 0 AND rejected_count >= 0");
+            table.HasCheckConstraint("ck_discovery_runs_status", "status IN ('queued', 'running', 'succeeded', 'failed')");
+            table.HasCheckConstraint("ck_discovery_runs_counts", "accepted_count >= 0 AND failed_profile_count >= 0");
         });
         entity.HasKey(item => item.Id);
         entity.Property(item => item.Id).HasColumnName("id").HasColumnType("uuid");
@@ -244,10 +244,13 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         entity.Property(item => item.FinishedAt).HasColumnName("finished_at").HasColumnType("timestamp with time zone");
         entity.Property(item => item.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
         entity.Property(item => item.AcceptedCount).HasColumnName("accepted_count").HasDefaultValue(0);
-        entity.Property(item => item.RejectedCount).HasColumnName("rejected_count").HasDefaultValue(0);
+        entity.Property(item => item.FailedProfileCount).HasColumnName("failed_profile_count").HasDefaultValue(0);
         entity.Property(item => item.ErrorCode).HasColumnName("error_code").HasMaxLength(80);
         entity.Property(item => item.Outcome).HasColumnName("outcome").HasMaxLength(40);
-        entity.Property(item => item.EvidenceCount).HasColumnName("evidence_count").HasDefaultValue(0);
+        entity.Property(item => item.Stage).HasColumnName("stage").HasMaxLength(40).IsRequired();
+        entity.Property(item => item.CandidateCount).HasColumnName("candidate_count").HasDefaultValue(0);
+        entity.Property(item => item.CompletedCandidates).HasColumnName("completed_candidates").HasDefaultValue(0);
+        entity.Property(item => item.ResultJson).HasColumnName("result_json").HasColumnType("jsonb");
         entity.HasIndex(item => item.StartedAt).HasDatabaseName("ix_discovery_runs_started_at");
     }
 
@@ -281,8 +284,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     }
 
     private static readonly ValueConverter<VerificationStatus, string> StatusConverter = new(
-        value => value == VerificationStatus.Official ? "official" : "external",
-        value => value == "official" ? VerificationStatus.Official : VerificationStatus.External);
+        value => value == VerificationStatus.Official ? "official" :
+            value == VerificationStatus.External ? "external" : "ai_generated",
+        value => value == "official" ? VerificationStatus.Official :
+            value == "external" ? VerificationStatus.External : VerificationStatus.AiGenerated);
 
     private static readonly ValueConverter<SourceType, string> SourceTypeConverter = new(
         value => value == SourceType.Official ? "official" : "external",

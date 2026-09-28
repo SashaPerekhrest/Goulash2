@@ -22,12 +22,13 @@ public sealed class PerplexityProviderAdapter(IHttpClientFactory factory) : IAiS
     {
         var response = await SearchAsync(model, apiKey, null, AiProviderPromptDefaults.Shared,
             "Найди одного действующего поставщика продуктов. Верни JSON-объект {\"suppliers\":[]} или запись со ссылкой на источник.",
-            "поставщик продуктов питания оптом", token);
-        return new AiProviderCheckResult(true, response.Evidence.Count > 0);
+            "поставщик продуктов питания оптом", token, SupplierDiscoveryJson.BuildLeadSchema());
+        return new AiProviderCheckResult(true, response.Sources.Count > 0);
     }
 
     public async Task<AiSearchResponse> SearchAsync(string model, string apiKey, string? routeProvider,
-        string systemPrompt, string userPrompt, string searchQuery, CancellationToken token)
+        string systemPrompt, string userPrompt, string searchQuery, CancellationToken token,
+        object? responseSchema = null, IReadOnlyList<string>? searchDomains = null)
     {
         if (!SupportsModel(model) || routeProvider is not null)
             throw new AiProviderException(ProviderFailureCode.UnsupportedModel);
@@ -38,7 +39,8 @@ public sealed class PerplexityProviderAdapter(IHttpClientFactory factory) : IAiS
             temperature = 0,
             disable_search = false,
             search_mode = "web",
-            response_format = new { type = "json_schema", json_schema = new { schema = SupplierDiscoveryResponseParser.BuildSupplierSchema() } },
+            response_format = new { type = "json_schema", json_schema = new { schema = responseSchema ?? SupplierDiscoveryJson.BuildProfileSchema() } },
+            search_domain_filter = searchDomains,
             messages = new[] { new { role = "system", content = systemPrompt }, new { role = "user", content = userPrompt } }
         };
         var root = await http.PostAsync("Perplexity", Endpoint, payload, apiKey, token);
@@ -46,16 +48,16 @@ public sealed class PerplexityProviderAdapter(IHttpClientFactory factory) : IAiS
         if (!root.TryGetProperty("search_results", out var results) || results.ValueKind != JsonValueKind.Array)
             throw new AiProviderException(ProviderFailureCode.InvalidResponse, "sources_envelope");
         var now = DateTimeOffset.UtcNow;
-        var evidence = new List<SupplierDiscoveryEvidence>();
+        var sources = new List<SupplierDiscoverySource>();
         foreach (var result in results.EnumerateArray())
         {
             if (result.ValueKind != JsonValueKind.Object) continue;
-            if (SupplierDiscoveryEvidencePolicy.TryCreateEvidence(
-                    SupplierDiscoveryResponseParser.ReadString(result, "url"),
-                    SupplierDiscoveryResponseParser.ReadString(result, "title"),
-                    SupplierDiscoveryResponseParser.ReadString(result, "snippet"), now, out var item))
-                evidence.Add(item!);
+            if (SupplierDiscoverySourcePolicy.TryCreateSource(
+                    SupplierDiscoveryJson.ReadString(result, "url"),
+                    SupplierDiscoveryJson.ReadString(result, "title"),
+                    SupplierDiscoveryJson.ReadString(result, "snippet"), now, out var item))
+                sources.Add(item!);
         }
-        return new AiSearchResponse(content, evidence, finishReason);
+        return new AiSearchResponse(content, sources, finishReason);
     }
 }

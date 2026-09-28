@@ -6,7 +6,8 @@ namespace Goulash.Domain;
 public enum VerificationStatus
 {
     Official,
-    External
+    External,
+    AiGenerated
 }
 
 /// <summary>
@@ -16,6 +17,7 @@ public enum FactStatus
 {
     Official,
     External,
+    AiGenerated,
     Missing
 }
 

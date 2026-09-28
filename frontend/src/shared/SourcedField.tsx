@@ -12,8 +12,9 @@ export function SourcedField<T>({ label, field, render }: {
     {label && <strong className="details-field-label">{label}</strong>}
     {field.status === 'missing' || field.value === null ? <span className="details-missing">Нет данных</span> : <>
       <span className="details-field-value">{show(field.value, false)}</span>
-      <span className={field.status === 'external' ? 'details-status external' : 'details-status official'}>
-        {field.status === 'external' ? 'Не подтверждённая информация' : 'Подтверждено официальным источником'}
+      <span className={`details-status ${field.status === 'official' ? 'official' : 'external'}`}>
+        {field.status === 'aiGenerated' ? 'Собрано моделью, не проверено' :
+          field.status === 'external' ? 'Извлечено моделью из внешней страницы' : 'Извлечено моделью с сайта компании'}
       </span>
       {field.observedAt && <span className="details-date">Получено: {formatDate(field.observedAt)}</span>}
       {field.sources.length > 0 && <ul className="details-source-list">
@@ -23,8 +24,9 @@ export function SourcedField<T>({ label, field, render }: {
         <summary>Другие наблюдения: {field.alternatives.length}</summary>
         {field.alternatives.map((alternative, index) => <div key={index} className="details-alternative">
           <span>{show(alternative.value, true)}</span>
-          <span className={alternative.status === 'external' ? 'details-status external' : 'details-status official'}>
-            {alternative.status === 'external' ? 'Не подтверждённая информация' : 'Подтверждено официальным источником'}
+          <span className={`details-status ${alternative.status === 'official' ? 'official' : 'external'}`}>
+            {alternative.status === 'aiGenerated' ? 'Собрано моделью, не проверено' :
+              alternative.status === 'external' ? 'Извлечено моделью из внешней страницы' : 'Извлечено моделью с сайта компании'}
           </span>
           <span className="details-date">Получено: {formatDate(alternative.observedAt)}</span>
           {alternative.sources.length > 0 && <ul className="details-source-list">
@@ -39,7 +41,7 @@ export function SourcedField<T>({ label, field, render }: {
 export function Source({ source }: { source: SupplierFactSource }) {
   return <div className="details-source">
     <SafeExternalLink className="safe-external-link" href={source.url}>{source.title || source.url}</SafeExternalLink>
-    <span>{source.type === 'official' ? 'Официальный' : 'Сторонний'} · {formatDate(source.retrievedAt)}</span>
+    <span>Страница сайта · {formatDate(source.retrievedAt)}</span>
     <p>{source.excerpt}</p>
   </div>
 }

@@ -25,58 +25,43 @@ public sealed record SupplierDiscoveryResponse(
     Guid DiscoveryId,
     IReadOnlyList<SupplierDiscoveryCard> Items,
     int AcceptedCount,
-    int RejectedCount,
+    int FailedProfileCount,
     int UpdatedExistingCount,
-    string Outcome = "candidates",
-    int EvidenceCount = 0);
+    string Outcome = "complete",
+    int SourcePageCount = 0,
+    bool TimeLimitReached = false);
 
-/// <summary>Persists accepted, evidence-checked discoveries and their database-backed response cards atomically.</summary>
+/// <summary>Persists structured discoveries with their source links and response cards atomically.</summary>
 public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
 {
-    public Task<SupplierDiscoveryResponse> SaveAsync(DiscoveryRun run,
-        IReadOnlyList<SupplierDiscoveryCandidate> candidates, int providerRejectedCount, int initiallyRejectedCount,
-        CancellationToken cancellationToken, string outcome = "candidates", int evidenceCount = 0) => transaction.ExecuteAsync(async (context, identityLock, token) =>
-    {
-        context.DiscoveryRuns.Add(run);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-        // Acquire every identity lock in a stable order before any lookup or insert. Domain locks serialize
-        // domain matches; name/region locks serialize the fallback for records without a verified domain.
+    public Task<SupplierDiscoveryResponse> SaveAsync(DiscoveryRun run,
+        IReadOnlyList<SupplierDiscoveryCandidate> candidates, int failedProfileCount,
+        CancellationToken cancellationToken, string outcome = "complete", int sourcePageCount = 0,
+        bool timeLimitReached = false) => transaction.ExecuteAsync(async (context, identityLock, token) =>
+    {
+        if (context.Entry(run).State == EntityState.Detached)
+            context.DiscoveryRuns.Add(run);
+
+        // Acquire every identity lock in a stable order before any lookup or insert.
         var lockKeys = candidates.SelectMany(candidate => GetLockKeys(candidate)).Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray();
         foreach (var key in lockKeys)
             await identityLock.AcquireKeyAsync(key, token);
 
-        var acceptedIds = new List<Guid>(5);
+        var acceptedIds = new List<Guid>(candidates.Count);
         var createdIds = new HashSet<Guid>();
         var updatedIds = new HashSet<Guid>();
-        var rejectedCount = Math.Max(0, providerRejectedCount) + Math.Max(0, initiallyRejectedCount);
 
         foreach (var candidate in candidates)
         {
-            if (acceptedIds.Count >= 5) break;
-            if (!IsEvidenceCheckedCandidateForRoute(candidate))
-            {
-                rejectedCount++;
-                continue;
-            }
-
             var match = await FindMatchAsync(context, candidate, token);
-            if (match.IsAmbiguous)
-            {
-                rejectedCount++;
-                continue;
-            }
-
             var supplier = match.Supplier;
             var existedBeforeThisRun = supplier is not null && !createdIds.Contains(supplier.Id);
             if (supplier is null)
             {
                 var normalizedName = SupplierIdentity.NormalizeName(candidate.Name);
-                if (normalizedName.Length is 0 or > 300)
-                {
-                    rejectedCount++;
-                    continue;
-                }
                 supplier = new Supplier(candidate.Name, normalizedName, DateTimeOffset.UtcNow);
                 context.Suppliers.Add(supplier);
                 createdIds.Add(supplier.Id);
@@ -88,8 +73,7 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
             if (!acceptedIds.Contains(supplier.Id)) acceptedIds.Add(supplier.Id);
         }
 
-        var finalOutcome = acceptedIds.Count > 0 ? "candidates" : rejectedCount > 0 ? "filtered_or_rejected" : outcome;
-        run.Complete(acceptedIds.Count, rejectedCount, DateTimeOffset.UtcNow, finalOutcome, evidenceCount);
+        var finalOutcome = outcome;
         await context.SaveChangesAsync(token);
 
         var savedSuppliers = await context.Suppliers.AsNoTracking().AsSplitQuery()
@@ -99,70 +83,42 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
                     .ThenInclude(link => link.Source)
             .ToListAsync(token);
         var cards = savedSuppliers.OrderBy(supplier => acceptedIds.IndexOf(supplier.Id)).Select(ToCard).ToArray();
-        return new SupplierDiscoveryResponse(run.Id, cards, cards.Length, rejectedCount, updatedIds.Count,
-            finalOutcome, evidenceCount);
+        var response = new SupplierDiscoveryResponse(run.Id, cards, cards.Length, failedProfileCount, updatedIds.Count,
+            finalOutcome, sourcePageCount, timeLimitReached);
+        run.Complete(cards.Length, failedProfileCount, DateTimeOffset.UtcNow, finalOutcome,
+            JsonSerializer.Serialize(response, JsonOptions));
+        await context.SaveChangesAsync(token);
+        return response;
     }, cancellationToken);
 
     private static IEnumerable<string> GetLockKeys(SupplierDiscoveryCandidate candidate)
     {
-        var name = SupplierIdentity.NormalizeName(candidate.Name);
-        var region = CurrentString(candidate.Facts, "region");
-        var normalizedRegion = string.IsNullOrWhiteSpace(region) ? null : SupplierIdentity.NormalizeName(region);
-        if (!string.IsNullOrWhiteSpace(candidate.ConfirmedOfficialDomain))
-            yield return $"supplier-domain:{candidate.ConfirmedOfficialDomain.Trim().ToLowerInvariant()}";
-        yield return SupplierIdentity.CreateLockKey(name, normalizedRegion);
+        var domain = ResolveSupplierDomain(candidate.WebsiteUrl);
+        if (domain is not null) yield return $"supplier-domain:{domain}";
+        yield return SupplierIdentity.CreateLockKey(SupplierIdentity.NormalizeName(candidate.Name), null);
     }
 
     private static async Task<(Supplier? Supplier, bool IsAmbiguous)> FindMatchAsync(ApplicationDbContext context,
         SupplierDiscoveryCandidate candidate, CancellationToken cancellationToken)
     {
         var name = SupplierIdentity.NormalizeName(candidate.Name);
-        var region = CurrentString(candidate.Facts, "region");
-        var normalizedRegion = string.IsNullOrWhiteSpace(region) ? null : SupplierIdentity.NormalizeName(region);
-        var domain = candidate.ConfirmedOfficialDomain?.Trim().ToLowerInvariant();
+        var domain = ResolveSupplierDomain(candidate.WebsiteUrl);
 
         if (!string.IsNullOrWhiteSpace(domain))
         {
-            var byDomain = context.Suppliers.Local.SingleOrDefault(item => item.OfficialDomain == domain)
-                ?? await context.Suppliers.SingleOrDefaultAsync(item => item.OfficialDomain == domain, cancellationToken);
+            var byDomain = context.Suppliers.Local.FirstOrDefault(item => item.OfficialDomain == domain)
+                ?? await context.Suppliers.Where(item => item.OfficialDomain == domain)
+                    .OrderByDescending(item => item.LastDiscoveredAt).FirstOrDefaultAsync(cancellationToken);
             if (byDomain is not null)
-            {
-                var nameContradicts = SupplierIdentity.NormalizeName(byDomain.Name) != name;
-                var oldRegion = string.IsNullOrWhiteSpace(byDomain.Region) ? null : SupplierIdentity.NormalizeName(byDomain.Region);
-                var regionContradicts = normalizedRegion is not null && oldRegion is not null && normalizedRegion != oldRegion;
-                return nameContradicts && regionContradicts
-                    ? (null, true)
-                    : (byDomain, false);
-            }
-
-            // A new verified domain can adopt a same-name/same-region record only while that record is undomained.
-            var undomained = await GetNameRegionMatchesAsync(context, name, normalizedRegion, undomainedOnly: true, cancellationToken);
-            return MatchUnique(undomained);
+                return (byDomain, false);
         }
 
-        var matches = await GetNameRegionMatchesAsync(context, name, normalizedRegion, undomainedOnly: false, cancellationToken);
-        return MatchUnique(matches);
-    }
-
-    private static (Supplier? Supplier, bool IsAmbiguous) MatchUnique(IReadOnlyList<Supplier> matches) => matches.Count switch
-    {
-        0 => (null, false),
-        1 => (matches[0], false),
-        _ => (null, true)
-    };
-
-    private static async Task<IReadOnlyList<Supplier>> GetNameRegionMatchesAsync(ApplicationDbContext context,
-        string normalizedName, string? normalizedRegion, bool undomainedOnly, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(normalizedRegion)) return Array.Empty<Supplier>();
-        var query = context.Suppliers.Where(item => item.NormalizedName == normalizedName);
-        if (undomainedOnly) query = query.Where(item => item.OfficialDomain == null);
-        var sameName = await query.ToListAsync(cancellationToken);
-        var localAdded = context.Suppliers.Local.Where(item => context.Entry(item).State == EntityState.Added &&
-            item.NormalizedName == normalizedName && (!undomainedOnly || item.OfficialDomain is null));
-        return sameName.Concat(localAdded).DistinctBy(item => item.Id)
-            .Where(item => !string.IsNullOrWhiteSpace(item.Region) &&
-                SupplierIdentity.NormalizeName(item.Region) == normalizedRegion).ToArray();
+        var query = context.Suppliers.Where(item => item.NormalizedName == name);
+        var sameName = await query.OrderByDescending(item => item.LastDiscoveredAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        sameName ??= context.Suppliers.Local.FirstOrDefault(item =>
+            context.Entry(item).State == EntityState.Added && item.NormalizedName == name);
+        return (sameName, false);
     }
 
     private static async Task LoadSupplierGraphAsync(ApplicationDbContext context, Supplier supplier, CancellationToken cancellationToken)
@@ -181,27 +137,30 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
         SupplierDiscoveryCandidate candidate, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var observations = new List<(string Field, string Item, JsonElement Value, JsonElement NormalizedValue, SupplierDiscoveryEvidence Evidence)>();
+        var observations = new List<(string Field, string Item, JsonElement Value, JsonElement NormalizedValue)>();
         var nameValue = JsonSerializer.SerializeToElement(candidate.Name);
-        observations.Add(("name", "name", nameValue, nameValue, candidate.NameEvidence));
-        if (!string.IsNullOrWhiteSpace(candidate.WebsiteUrl) && candidate.WebsiteEvidence is not null &&
-            SupplierDiscoveryEvidencePolicy.TryNormalizeHttpUrl(candidate.WebsiteUrl, out var website))
+        observations.Add(("name", "name", nameValue, nameValue));
+        if (!string.IsNullOrWhiteSpace(candidate.WebsiteUrl) &&
+            SupplierDiscoverySourcePolicy.TryNormalizeHttpUrl(candidate.WebsiteUrl, out var website))
         {
             var websiteValue = JsonSerializer.SerializeToElement(candidate.WebsiteUrl);
             var normalizedWebsite = JsonSerializer.SerializeToElement(website.AbsoluteUri);
-            observations.Add(("website", "website", websiteValue, normalizedWebsite, candidate.WebsiteEvidence));
+            observations.Add(("website", "website", websiteValue, normalizedWebsite));
         }
         observations.AddRange(candidate.Facts.Select(fact => (fact.FieldKey.ToLowerInvariant(), fact.ItemKey,
-            fact.Value, fact.NormalizedValue, fact.Evidence)));
+            fact.Value, fact.NormalizedValue)));
+
+        foreach (var source in candidate.Sources)
+        {
+            if (SupplierDiscoverySourcePolicy.TryCreateSource(source.Url.AbsoluteUri, source.Title, source.Excerpt,
+                    source.RetrievedAt, out var safeSource))
+                GetOrCreateSource(context, supplier, safeSource!, SourceType.External);
+        }
 
         foreach (var observation in observations)
         {
-            var effectiveDomain = candidate.ConfirmedOfficialDomain ?? supplier.OfficialDomain;
-            var status = SupplierDiscoveryEvidencePolicy.IsEvidenceFromOfficialDomain(observation.Evidence, effectiveDomain)
-                ? VerificationStatus.Official
-                : VerificationStatus.External;
             await StoreFactAsync(context, supplier, observation.Field, observation.Item,
-                observation.Value, observation.NormalizedValue, status, observation.Evidence, now, cancellationToken);
+                observation.Value, observation.NormalizedValue, VerificationStatus.AiGenerated, now, cancellationToken);
         }
 
         var currentName = supplier.Facts.SingleOrDefault(fact => fact.FieldKey == "name" && fact.ItemKey == "name" && fact.IsCurrent);
@@ -218,10 +177,8 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
 
         var city = CurrentString(supplier.Facts, "city");
         var region = CurrentString(supplier.Facts, "region");
-        var officialDomain = candidate.ConfirmedOfficialDomain ?? supplier.OfficialDomain;
-        var officialSiteUrl = candidate.ConfirmedOfficialDomain is not null
-            ? candidate.WebsiteUrl
-            : supplier.OfficialSiteUrl;
+        var officialDomain = ResolveSupplierDomain(candidate.WebsiteUrl) ?? supplier.OfficialDomain;
+        var officialSiteUrl = candidate.WebsiteUrl ?? supplier.OfficialSiteUrl;
         supplier.SetOfficialIdentity(officialSiteUrl, officialDomain,
             city is { Length: <= 160 } ? city : supplier.City,
             region is { Length: <= 160 } ? region : supplier.Region);
@@ -231,21 +188,18 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
     }
 
     private static async Task StoreFactAsync(ApplicationDbContext context, Supplier supplier, string fieldKey,
-        string itemKey, JsonElement value, JsonElement normalizedValue, VerificationStatus status, SupplierDiscoveryEvidence evidence,
+        string itemKey, JsonElement value, JsonElement normalizedValue, VerificationStatus status,
         DateTimeOffset observedAt, CancellationToken cancellationToken)
     {
         var canonicalValue = CanonicalJson(value);
         var matching = supplier.Facts.Where(fact => fact.FieldKey == fieldKey && fact.ItemKey == itemKey).ToArray();
         var current = matching.SingleOrDefault(fact => fact.IsCurrent);
-        var source = GetOrCreateSource(context, supplier, evidence,
-            status == VerificationStatus.Official ? SourceType.Official : SourceType.External);
         var reusable = matching.FirstOrDefault(fact => fact.Status == status && CanonicalJson(fact.ValueJson) == canonicalValue);
 
         if (reusable is not null)
         {
             reusable.RefreshObservedAt(observedAt);
             reusable.RefreshNormalizedValue(normalizedValue);
-            reusable.AddSource(source);
             if (reusable != current && ShouldReplaceCurrent(current, status))
             {
                 if (current is not null)
@@ -266,17 +220,17 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
         }
 
         var fact = new SupplierFact(supplier.Id, fieldKey, itemKey, value, status, observedAt, isCurrent, normalizedValue);
-        fact.AddSource(source);
         supplier.Facts.Add(fact);
         context.SupplierFacts.Add(fact);
     }
 
     private static bool ShouldReplaceCurrent(SupplierFact? current, VerificationStatus incomingStatus) =>
-        current is null || current.Status == VerificationStatus.External && incomingStatus == VerificationStatus.Official ||
+        current is null || incomingStatus == VerificationStatus.AiGenerated ||
+        current.Status == VerificationStatus.External && incomingStatus == VerificationStatus.Official ||
         current.Status == incomingStatus;
 
     private static SupplierSource GetOrCreateSource(ApplicationDbContext context, Supplier supplier,
-        SupplierDiscoveryEvidence evidence, SourceType type)
+        SupplierDiscoverySource evidence, SourceType type)
     {
         var url = evidence.Url.AbsoluteUri;
         var excerpt = evidence.Excerpt.Trim();
@@ -363,39 +317,6 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
         await Task.CompletedTask;
     }
 
-    public static bool IsEvidenceCheckedCandidateForRoute(SupplierDiscoveryCandidate? candidate)
-    {
-        if (candidate is null || !SupplierDiscoveryEvidencePolicy.IsValidSupplierName(candidate.Name) ||
-            !ValidEvidence(candidate.NameEvidence) ||
-            !(SupplierDiscoveryEvidencePolicy.ContainsSupplierName(candidate.Name, candidate.NameEvidence.Excerpt) ||
-              SupplierDiscoveryEvidencePolicy.ContainsSupplierName(candidate.Name, candidate.NameEvidence.Title)) ||
-            candidate.Facts is null || candidate.Facts.Count > 100) return false;
-
-        if (!string.IsNullOrWhiteSpace(candidate.WebsiteUrl) &&
-            (!SupplierDiscoveryEvidencePolicy.TryNormalizeHttpUrl(candidate.WebsiteUrl, out _) ||
-             candidate.WebsiteEvidence is null || !ValidEvidence(candidate.WebsiteEvidence))) return false;
-
-        return candidate.Facts.All(fact => fact is not null &&
-            SupplierDiscoveryEvidencePolicy.IsAllowedFactField(fact.FieldKey) &&
-            !string.IsNullOrWhiteSpace(fact.ItemKey) && fact.ItemKey.Length <= 200 &&
-            SupplierDiscoveryEvidencePolicy.IsSupportedFactValue(fact.Value) &&
-            IsServerNormalizedValue(fact) &&
-            ValidEvidence(fact.Evidence) &&
-            SupplierDiscoveryEvidencePolicy.EvidenceSupportsValue(fact.Value, fact.Evidence.Excerpt));
-    }
-
-    private static bool IsServerNormalizedValue(SupplierObservedFact fact)
-    {
-        if (!SupplierDiscoveryEvidencePolicy.IsSupportedFactValue(fact.NormalizedValue)) return false;
-        var expected = SupplierFactNormalizer.Normalize(fact.FieldKey, fact.Value);
-        return CanonicalJson(expected) == CanonicalJson(fact.NormalizedValue);
-    }
-
-    private static bool ValidEvidence(SupplierDiscoveryEvidence evidence) =>
-        evidence is not null && evidence.Url is not null && evidence.RetrievedAt.Offset == TimeSpan.Zero &&
-        SupplierDiscoveryEvidencePolicy.TryCreateEvidence(evidence.Url.AbsoluteUri, evidence.Title, evidence.Excerpt,
-            evidence.RetrievedAt, out _);
-
     private static SupplierDiscoveryCard ToCard(Supplier supplier)
     {
         var currentFacts = supplier.Facts.Where(fact => fact.IsCurrent).ToArray();
@@ -405,7 +326,7 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
                 ? new { Fact = fact, Minimum = minimum, Maximum = maximum, Currency = currency, Unit = unit, Approximate = approximate }
                 : null)
             .Where(item => item is not null)
-            .OrderBy(item => item!.Fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(item => item!.Fact.Status == VerificationStatus.AiGenerated ? 0 : 1)
             .ThenBy(item => item!.Approximate ? 1 : 0)
             .ThenBy(item => item!.Minimum)
             .ToArray();
@@ -433,7 +354,7 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
             "name", "city", "product_name", "price", "product_price", "delivery_days", "website", "phone", "email"
         };
         var unconfirmed = currentFacts.Any(fact => shownFields.Contains(fact.FieldKey) &&
-            fact.Status == VerificationStatus.External);
+            fact.Status != VerificationStatus.Official);
 
         return new SupplierDiscoveryCard(supplier.Id, supplier.Name, city, productNames,
             pricePreview, selectedPrice?.Approximate ?? false,
@@ -465,11 +386,11 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
         approximate = approximateElement.GetBoolean();
         var hasMinimum = TryGet(value, "amountMin", out var minElement);
         var hasMaximum = TryGet(value, "amountMax", out var maxElement);
-        if (hasMinimum && hasMaximum && SupplierDiscoveryMatcher.TryDecimal(minElement, out minimum) &&
-            SupplierDiscoveryMatcher.TryDecimal(maxElement, out maximum))
+        if (hasMinimum && hasMaximum && SupplierFactNormalizer.TryDecimal(minElement, out minimum) &&
+            SupplierFactNormalizer.TryDecimal(maxElement, out maximum))
             return minimum >= 0 && maximum >= minimum;
         if (!hasMinimum && !hasMaximum && TryGet(value, "amount", out var amountElement) &&
-            SupplierDiscoveryMatcher.TryDecimal(amountElement, out var amount) && amount >= 0)
+            SupplierFactNormalizer.TryDecimal(amountElement, out var amount) && amount >= 0)
         {
             minimum = maximum = amount;
             return true;
@@ -496,7 +417,7 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
 
     private static string? CurrentString(IEnumerable<SupplierFact> facts, string fieldKey) =>
         facts.Where(fact => fact.FieldKey == fieldKey && fact.IsCurrent)
-            .OrderBy(fact => fact.Status == VerificationStatus.Official ? 0 : 1)
+            .OrderBy(fact => fact.Status == VerificationStatus.AiGenerated ? 0 : fact.Status == VerificationStatus.Official ? 1 : 2)
             .Select(fact => ReadString(fact.ValueJson))
             .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
@@ -509,9 +430,15 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
     private static bool TryReadStoredDecimal(string valueJson, out decimal number)
     {
         using var document = JsonDocument.Parse(valueJson);
-        if (SupplierDiscoveryMatcher.TryDecimal(document.RootElement, out number)) return true;
+        if (SupplierFactNormalizer.TryDecimal(document.RootElement, out number)) return true;
         number = default;
         return false;
+    }
+
+    private static string? ResolveSupplierDomain(string? websiteUrl)
+    {
+        if (!SupplierDiscoverySourcePolicy.TryNormalizeHttpUrl(websiteUrl, out var uri)) return null;
+        return SupplierDiscoverySourcePolicy.GetRegistrableDomain(uri.IdnHost) ?? uri.IdnHost.ToLowerInvariant();
     }
 
     private static bool TryGet(JsonElement value, string name, out JsonElement result)

@@ -25,22 +25,25 @@ public interface IAiProviderAdapter
 
 public sealed record AiProviderCheckResult(bool Connected, bool WebSearchAvailable);
 
-/// <summary>Provider wire protocol only. The discovery algorithm and evidence checks are shared.</summary>
+/// <summary>Provider wire protocol used by the two-stage discovery algorithm.</summary>
 public interface IAiSearchTransport : IAiProviderAdapter
 {
     Task<AiSearchResponse> SearchAsync(string model, string apiKey, string? routeProvider,
-        string systemPrompt, string userPrompt, string searchQuery, CancellationToken cancellationToken);
+        string systemPrompt, string userPrompt, string searchQuery, CancellationToken cancellationToken,
+        object? responseSchema = null, IReadOnlyList<string>? searchDomains = null);
 }
 
-public sealed record AiSearchResponse(string Content, IReadOnlyList<SupplierDiscoveryEvidence> Evidence,
+public sealed record AiSearchResponse(string Content, IReadOnlyList<SupplierDiscoverySource> Sources,
     string? FinishReason = null);
 
 /// <summary>Configured server-side discovery entry point; credentials are loaded from protected settings.</summary>
 public interface ISupplierDiscoveryProvider
 {
     Task<SupplierDiscoveryResult> DiscoverAsync(string query, SupplierDiscoveryFilters filters, int limit,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken, Func<SupplierDiscoveryProgress, Task>? progress = null);
 }
+
+public sealed record SupplierDiscoveryProgress(string Stage, int CompletedCandidates, int TotalCandidates);
 
 public sealed record SupplierPriceRange(decimal? Min, decimal? Max, string? Currency, string? Unit);
 
@@ -57,32 +60,16 @@ public sealed record SupplierDiscoveryFilters(
     SupplierMinimumOrderBound? MinMinimumOrder = null,
     SupplierMinimumOrderBound? MaxMinimumOrder = null);
 
-public sealed record SupplierDiscoveryEvidence(Uri Url, string Title, string Excerpt, DateTimeOffset RetrievedAt);
+public sealed record SupplierDiscoverySource(Uri Url, string Title, string Excerpt, DateTimeOffset RetrievedAt);
 
 public sealed record SupplierObservedFact(string FieldKey, string ItemKey, JsonElement Value,
-    JsonElement NormalizedValue, SupplierDiscoveryEvidence Evidence);
+    JsonElement NormalizedValue);
 
-public sealed record SupplierDiscoveryCandidate(string Name, SupplierDiscoveryEvidence NameEvidence,
-    string? WebsiteUrl, SupplierDiscoveryEvidence? WebsiteEvidence,
-    IReadOnlyList<SupplierObservedFact> Facts)
-{
-    public string? ConfirmedOfficialDomain => SupplierDiscoveryEvidencePolicy.ResolveOfficialDomain(this);
-
-    public SupplierEvidenceStatus Classify(SupplierDiscoveryEvidence evidence) =>
-        SupplierDiscoveryEvidencePolicy.IsEvidenceFromOfficialDomain(evidence, ConfirmedOfficialDomain)
-            ? SupplierEvidenceStatus.Official
-            : SupplierEvidenceStatus.External;
-}
-
-public enum SupplierEvidenceStatus
-{
-    Official,
-    External
-}
+public sealed record SupplierDiscoveryCandidate(string Name, string? WebsiteUrl,
+    IReadOnlyList<SupplierObservedFact> Facts, IReadOnlyList<SupplierDiscoverySource> Sources);
 
 public sealed record SupplierDiscoveryResult(IReadOnlyList<SupplierDiscoveryCandidate> Candidates,
-    int RejectedRecordCount, int RejectedFactCount = 0, int EvidenceCount = 0,
-    string Outcome = "candidates", IReadOnlyDictionary<string, int>? RejectedReasons = null);
+    int FailedProfileCount, int SourcePageCount = 0, string Outcome = "complete", bool TimeLimitReached = false);
 
 public enum ProviderFailureCode
 {

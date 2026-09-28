@@ -209,10 +209,24 @@ export type DiscoverySearchResponse = {
   discoveryId: string
   items: DiscoverySearchCard[]
   acceptedCount: number
-  rejectedCount: number
+  failedProfileCount: number
   updatedExistingCount: number
-  outcome: 'candidates' | 'no_sources' | 'model_empty' | 'invalid_candidates' | 'filtered_or_rejected'
-  evidenceCount: number
+  outcome: 'complete' | 'partial' | 'no_candidates' | 'profiles_failed'
+  sourcePageCount: number
+  timeLimitReached: boolean
+}
+
+export type DiscoveryJobAccepted = { discoveryId: string; status: 'queued' }
+export type DiscoveryJobStatus = {
+  discoveryId: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  stage: string
+  candidateCount: number
+  completedCandidates: number
+  acceptedCount: number
+  failedProfileCount: number
+  errorCode: string | null
+  result: DiscoverySearchResponse | null
 }
 
 export type SupplierFavoriteResponse = { id: string; isFavorite: boolean }
@@ -248,13 +262,13 @@ export type SupplierFactSource = {
 }
 export type SupplierFactAlternative<T> = {
   value: T
-  status: 'official' | 'external'
+  status: 'official' | 'external' | 'aiGenerated'
   sources: SupplierFactSource[]
   observedAt: string
 }
 export type SupplierSourcedValue<T> = {
   value: T | null
-  status: 'official' | 'external' | 'missing'
+  status: 'official' | 'external' | 'aiGenerated' | 'missing'
   sources: SupplierFactSource[]
   observedAt: string | null
   alternatives: SupplierFactAlternative<T>[]
@@ -285,7 +299,7 @@ export type SupplierDetails = {
     }>
   }>
   delivery: { terms: SupplierSourcedValue<string>; maxDays: SupplierSourcedValue<number> }
-  minimumOrder: SupplierSourcedValue<{ amount: string; unit: string }>
+  minimumOrder: SupplierSourcedValue<{ amount: string | null; unit: string | null; details: string | null }>
   certificates: SupplierSourcedValue<string>[]
   images: SupplierSourcedValue<string>[]
   sources: SupplierFactSource[]
@@ -344,10 +358,25 @@ export function checkAiSettings() {
 
 export async function discoverSuppliers(request: DiscoverySearchRequest, signal?: AbortSignal) {
   const response = await apiClient.post<unknown, DiscoverySearchRequest>('/discoveries', request, { signal })
-  if (!isDiscoverySearchResponse(response)) {
+  if (!isRecord(response) || typeof response.discoveryId !== 'string' || !response.discoveryId ||
+    response.status !== 'queued') {
     throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
   }
-  return response
+  return response as DiscoveryJobAccepted
+}
+
+export async function getDiscoveryStatus(id: string, signal?: AbortSignal) {
+  const response = await apiClient.get<unknown>(`/discoveries/${encodeURIComponent(id)}`, signal)
+  if (!isRecord(response) || response.discoveryId !== id ||
+    !['queued', 'running', 'succeeded', 'failed'].includes(response.status as string) ||
+    typeof response.stage !== 'string' || !isNonNegativeInteger(response.candidateCount) ||
+    !isNonNegativeInteger(response.completedCandidates) ||
+    !isNonNegativeInteger(response.acceptedCount) || !isNonNegativeInteger(response.failedProfileCount) ||
+    !(response.errorCode === null || typeof response.errorCode === 'string') ||
+    !(response.result === null || isDiscoverySearchResponse(response.result))) {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
+  return response as DiscoveryJobStatus
 }
 
 export async function setSupplierFavorite(id: string, isFavorite: boolean) {
@@ -382,12 +411,12 @@ export function getSupplierDetails(id: string, signal?: AbortSignal) {
 
 function isDiscoverySearchResponse(value: unknown): value is DiscoverySearchResponse {
   if (!isRecord(value) || typeof value.discoveryId !== 'string' || !value.discoveryId ||
-    !Array.isArray(value.items) || value.items.length > 5 ||
+    !Array.isArray(value.items) || value.items.length > 20 ||
     !isNonNegativeInteger(value.acceptedCount) || value.acceptedCount !== value.items.length ||
-    !isNonNegativeInteger(value.rejectedCount) || !isNonNegativeInteger(value.updatedExistingCount) ||
+    !isNonNegativeInteger(value.failedProfileCount) || !isNonNegativeInteger(value.updatedExistingCount) ||
     value.updatedExistingCount > value.acceptedCount ||
-    !['candidates', 'no_sources', 'model_empty', 'invalid_candidates', 'filtered_or_rejected'].includes(value.outcome as string) ||
-    !isNonNegativeInteger(value.evidenceCount)) return false
+    !['complete', 'partial', 'no_candidates', 'profiles_failed'].includes(value.outcome as string) ||
+    !isNonNegativeInteger(value.sourcePageCount) || typeof value.timeLimitReached !== 'boolean') return false
 
   return value.items.every((item) => isRecord(item) &&
     typeof item.id === 'string' && item.id.length > 0 &&

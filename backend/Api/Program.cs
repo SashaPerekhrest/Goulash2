@@ -99,6 +99,13 @@ builder.Services.AddSingleton(new AdminPasswordVerifier(adminPassword));
 builder.Services.AddSingleton(keyProtector);
 builder.Services.AddHttpClient("Perplexity", client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient("Polza", client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient("SupplierSites", client => client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        AutomaticDecompression = System.Net.DecompressionMethods.All,
+        ConnectTimeout = Timeout.InfiniteTimeSpan
+    });
 builder.Services.AddSingleton(sp => new PerplexityProviderAdapter(sp.GetRequiredService<IHttpClientFactory>()));
 builder.Services.AddSingleton(sp => new PolzaProviderAdapter(sp.GetRequiredService<IHttpClientFactory>()));
 builder.Services.AddSingleton<IAiProviderAdapter>(sp => sp.GetRequiredService<PerplexityProviderAdapter>());
@@ -107,9 +114,12 @@ builder.Services.AddSingleton<IAiProviderAdapter>(sp => sp.GetRequiredService<Po
 builder.Services.AddSingleton<IAiSearchTransport>(sp => sp.GetRequiredService<PolzaProviderAdapter>());
 builder.Services.AddSingleton<IAiProviderRegistry, AiProviderRegistry>();
 builder.Services.AddScoped<SupplierDiscoveryService>();
+builder.Services.AddSingleton<SupplierSiteResearcher>();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISupplierDiscoveryProvider, ConfiguredSupplierDiscoveryProvider>();
 builder.Services.AddScoped<DiscoveryPersistence>();
+builder.Services.AddSingleton<DiscoveryJobQueue>();
+builder.Services.AddHostedService<DiscoveryBackgroundWorker>();
 
 var app = builder.Build();
 

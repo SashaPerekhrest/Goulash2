@@ -3,6 +3,7 @@ using Goulash.Api.Errors;
 using Goulash.Application;
 using Goulash.Domain;
 using Goulash.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace Goulash.Api.Providers;
 
@@ -19,6 +20,10 @@ public sealed record DiscoveryFiltersRequest(
     DiscoveryMinimumOrderRequest? MaxMinimumOrder);
 public sealed record DiscoveryPriceRequest(JsonElement? Min, JsonElement? Max, string? Currency, string? Unit);
 public sealed record DiscoveryMinimumOrderRequest(JsonElement? Amount, string? Unit);
+public sealed record DiscoveryJobAccepted(Guid DiscoveryId, string Status);
+public sealed record DiscoveryJobStatusResponse(Guid DiscoveryId, string Status, string Stage, int CandidateCount,
+    int CompletedCandidates, int AcceptedCount, int FailedProfileCount, string? ErrorCode,
+    SupplierDiscoveryResponse? Result);
 
 public static class DiscoveryEndpoints
 {
@@ -29,17 +34,22 @@ public static class DiscoveryEndpoints
         routes.MapPost("/discoveries", DiscoverAsync)
             .WithName("DiscoverSuppliers")
             .WithTags("Discoveries")
-            .WithSummary("Ищет новых поставщиков, проверяет фильтры и сохраняет до пяти записей")
-            .Produces<SupplierDiscoveryResponse>(StatusCodes.Status200OK)
+            .WithSummary("Ищет поставщиков с учётом фильтров и сохраняет профили сайтов")
+            .Produces<DiscoveryJobAccepted>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status502BadGateway)
             .ProducesProblem(StatusCodes.Status504GatewayTimeout);
+        routes.MapGet("/discoveries/{id:guid}", GetDiscoveryAsync)
+            .WithName("GetDiscovery")
+            .WithTags("Discoveries")
+            .Produces<DiscoveryJobStatusResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         return routes;
     }
 
     private static async Task<IResult> DiscoverAsync(DiscoveryRequest? request, HttpContext context,
-        ISupplierDiscoveryProvider provider, DiscoveryPersistence persistence, ApplicationDbContext db,
+        DiscoveryJobQueue queue, ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
         if (request is null)
@@ -55,42 +65,26 @@ public static class DiscoveryEndpoints
         if (query.Length == 0 && !HasSubstantiveFilter(filters!))
             return ValidationError(context, "Укажите query или хотя бы один содержательный фильтр");
 
-        var runQuery = JsonSerializer.SerializeToElement(new { query, filters = request.Filters }, JsonOptions);
+        var runQuery = JsonSerializer.SerializeToElement(new { query, filters }, JsonOptions);
         var run = new DiscoveryRun(runQuery, DateTimeOffset.UtcNow);
-        SupplierDiscoveryResult discovery;
-        try
-        {
-            discovery = await provider.DiscoverAsync(query, filters!, 5, cancellationToken);
-            if (discovery is null || discovery.Candidates is null || discovery.RejectedRecordCount < 0)
-                throw new AiProviderException(ProviderFailureCode.InvalidResponse);
-        }
-        catch (AiProviderException exception)
-        {
-            var error = MapProviderFailure(exception.Code);
-            run.Fail(error.Code, DateTimeOffset.UtcNow, exception.Stage);
-            await PersistFailedRunAsync(db, run, cancellationToken);
-            return ProblemResponses.Create(context, error.Status, error.Title, error.Code);
-        }
+        await db.DiscoveryRuns.AddAsync(run, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        await queue.EnqueueAsync(run.Id);
+        return Results.Accepted($"/api/v1/discoveries/{run.Id}", new DiscoveryJobAccepted(run.Id, run.Status));
+    }
 
-        var matching = new List<SupplierDiscoveryCandidate>();
-        var rejectedByFilters = 0;
-        foreach (var candidate in discovery.Candidates)
-        {
-            if (candidate is null)
-            {
-                rejectedByFilters++;
-                continue;
-            }
-            if (!DiscoveryPersistence.IsEvidenceCheckedCandidateForRoute(candidate) ||
-                !SupplierDiscoveryMatcher.Matches(candidate, filters!))
-                rejectedByFilters++;
-            else
-                matching.Add(candidate);
-        }
+    private static async Task<IResult> GetDiscoveryAsync(Guid id, HttpContext context, ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var run = await db.DiscoveryRuns.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
+        if (run is null)
+            return ProblemResponses.Create(context, StatusCodes.Status404NotFound, "Поиск не найден", "NOT_FOUND");
 
-        var response = await persistence.SaveAsync(run, matching, discovery.RejectedRecordCount,
-            rejectedByFilters, cancellationToken, discovery.Outcome, discovery.EvidenceCount);
-        return Results.Ok(response);
+        SupplierDiscoveryResponse? result = null;
+        if (!string.IsNullOrWhiteSpace(run.ResultJson))
+            result = JsonSerializer.Deserialize<SupplierDiscoveryResponse>(run.ResultJson, JsonOptions);
+        return Results.Ok(new DiscoveryJobStatusResponse(run.Id, run.Status, run.Stage,
+            run.CandidateCount, run.CompletedCandidates, run.AcceptedCount, run.FailedProfileCount, run.ErrorCode, result));
     }
 
     private static bool TryBuildFilters(DiscoveryFiltersRequest? request,
@@ -210,7 +204,7 @@ public static class DiscoveryEndpoints
     }
 
     private static bool TryReadNonNegative(JsonElement value, out decimal number) =>
-        SupplierDiscoveryMatcher.TryDecimal(value, out number) && number >= 0;
+        SupplierFactNormalizer.TryDecimal(value, out number) && number >= 0;
 
     private static bool HasSubstantiveFilter(SupplierDiscoveryFilters filters) =>
         !string.IsNullOrWhiteSpace(filters.City) || !string.IsNullOrWhiteSpace(filters.Region) ||
@@ -224,19 +218,4 @@ public static class DiscoveryEndpoints
         ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
             "Некорректные параметры поиска", "VALIDATION_ERROR", detail);
 
-    private static async Task PersistFailedRunAsync(ApplicationDbContext db, DiscoveryRun run,
-        CancellationToken cancellationToken)
-    {
-        db.DiscoveryRuns.Add(run);
-        await db.SaveChangesAsync(cancellationToken);
-    }
-
-    private static (int Status, string Code, string Title) MapProviderFailure(ProviderFailureCode code) => code switch
-    {
-        ProviderFailureCode.NotConfigured => (StatusCodes.Status409Conflict, "PROVIDER_NOT_CONFIGURED", "Провайдер не настроен"),
-        ProviderFailureCode.Timeout => (StatusCodes.Status504GatewayTimeout, "PROVIDER_TIMEOUT", "Превышено время ожидания провайдера"),
-        ProviderFailureCode.InvalidResponse => (StatusCodes.Status502BadGateway, "PROVIDER_INVALID_RESPONSE", "Провайдер вернул некорректный ответ"),
-        ProviderFailureCode.UnsupportedModel => (StatusCodes.Status400BadRequest, "UNSUPPORTED_MODEL", "Модель провайдера не поддерживается"),
-        _ => (StatusCodes.Status502BadGateway, "PROVIDER_UNAVAILABLE", "Провайдер временно недоступен")
-    };
 }

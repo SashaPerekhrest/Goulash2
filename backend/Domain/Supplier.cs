@@ -9,7 +9,7 @@ public sealed class Supplier
     public Supplier(string name, string normalizedName, DateTimeOffset now)
     {
         if (string.IsNullOrWhiteSpace(name))
-            throw new ArgumentException("A supplier must have a source-backed name.", nameof(name));
+            throw new ArgumentException("A supplier name is required.", nameof(name));
         if (string.IsNullOrWhiteSpace(normalizedName))
             throw new ArgumentException("A normalized supplier name is required.", nameof(normalizedName));
         EnsureUtc(now, nameof(now));
@@ -45,8 +45,8 @@ public sealed class Supplier
         ArgumentNullException.ThrowIfNull(fact);
         if (fact.SupplierId != Id || fact.FieldKey != "name")
             throw new InvalidOperationException("The supplier summary name must point to a current name fact.");
-        if (!fact.IsCurrent || !fact.FactSources.Any(link => !string.IsNullOrWhiteSpace(link.Source.Excerpt)))
-            throw new InvalidOperationException("The current name fact must be supported by a source excerpt.");
+        if (!fact.IsCurrent)
+            throw new InvalidOperationException("The current name fact must be current.");
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("A current name cannot be empty.", nameof(name));
         if (!string.Equals(JsonSerializer.Deserialize<string>(fact.ValueJson)?.Trim(), name.Trim(), StringComparison.Ordinal))
