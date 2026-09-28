@@ -28,8 +28,7 @@ public sealed record SupplierDiscoveryResponse(
     int FailedProfileCount,
     int UpdatedExistingCount,
     string Outcome = "complete",
-    int SourcePageCount = 0,
-    bool TimeLimitReached = false);
+    int SourcePageCount = 0);
 
 /// <summary>Persists structured discoveries with their source links and response cards atomically.</summary>
 public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
@@ -38,8 +37,8 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
 
     public Task<SupplierDiscoveryResponse> SaveAsync(DiscoveryRun run,
         IReadOnlyList<SupplierDiscoveryCandidate> candidates, int failedProfileCount,
-        CancellationToken cancellationToken, string outcome = "complete", int sourcePageCount = 0,
-        bool timeLimitReached = false) => transaction.ExecuteAsync(async (context, identityLock, token) =>
+        CancellationToken cancellationToken, string outcome = "complete", int sourcePageCount = 0) =>
+        transaction.ExecuteAsync(async (context, identityLock, token) =>
     {
         if (context.Entry(run).State == EntityState.Detached)
             context.DiscoveryRuns.Add(run);
@@ -84,7 +83,7 @@ public sealed class DiscoveryPersistence(SupplierDataTransaction transaction)
             .ToListAsync(token);
         var cards = savedSuppliers.OrderBy(supplier => acceptedIds.IndexOf(supplier.Id)).Select(ToCard).ToArray();
         var response = new SupplierDiscoveryResponse(run.Id, cards, cards.Length, failedProfileCount, updatedIds.Count,
-            finalOutcome, sourcePageCount, timeLimitReached);
+            finalOutcome, sourcePageCount);
         run.Complete(cards.Length, failedProfileCount, DateTimeOffset.UtcNow, finalOutcome,
             JsonSerializer.Serialize(response, JsonOptions));
         await context.SaveChangesAsync(token);

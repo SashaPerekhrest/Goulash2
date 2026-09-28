@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Goulash.Application;
 using Goulash.Domain;
@@ -12,7 +13,21 @@ public sealed class DiscoveryBackgroundWorker(
     ILogger<DiscoveryBackgroundWorker> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly TimeSpan DiscoveryTimeLimit = TimeSpan.FromMinutes(2);
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _activeJobs = new();
+
+    public bool RequestCancellation(Guid id)
+    {
+        if (!_activeJobs.TryGetValue(id, out var cancellation)) return false;
+        try
+        {
+            cancellation.Cancel();
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -53,59 +68,59 @@ public sealed class DiscoveryBackgroundWorker(
 
     private async Task ProcessAsync(Guid id, CancellationToken token)
     {
+        using var jobCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _activeJobs[id] = jobCancellation;
         await using var scope = scopeFactory.CreateAsyncScope();
         var services = scope.ServiceProvider;
         var db = services.GetRequiredService<ApplicationDbContext>();
         var run = await db.DiscoveryRuns.SingleOrDefaultAsync(item => item.Id == id, token);
-        if (run is null || run.Status != "queued") return;
+        if (run is null || run.Status != "queued")
+        {
+            _activeJobs.TryRemove(id, out _);
+            return;
+        }
 
-        run.MarkStarted();
-        await db.SaveChangesAsync(token);
+        var claimed = await db.DiscoveryRuns.Where(item => item.Id == id && item.Status == "queued")
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(item => item.Status, "running")
+                .SetProperty(item => item.Stage, "searching"), token);
+        if (claimed == 0)
+        {
+            _activeJobs.TryRemove(id, out _);
+            return;
+        }
+        await db.Entry(run).ReloadAsync(token);
+        var jobToken = jobCancellation.Token;
         try
         {
             var work = ReadWorkRequest(run.QueryJson);
             var provider = services.GetRequiredService<ISupplierDiscoveryProvider>();
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            deadline.CancelAfter(DiscoveryTimeLimit);
             using var progressGate = new SemaphoreSlim(1, 1);
-            SupplierDiscoveryResult discovery;
-            try
+            var discovery = await provider.DiscoverAsync(work.Query, work.Filters, 20, jobToken, async progress =>
             {
-                discovery = await provider.DiscoverAsync(work.Query, work.Filters, 20, deadline.Token, async progress =>
+                await progressGate.WaitAsync(jobToken);
+                try
                 {
-                    await progressGate.WaitAsync(token);
-                    try
-                    {
-                        run.UpdateProgress(progress.Stage, progress.CompletedCandidates, progress.TotalCandidates);
-                        await db.SaveChangesAsync(token);
-                    }
-                    finally
-                    {
-                        progressGate.Release();
-                    }
-                });
-            }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
-            {
-                logger.LogWarning("Discovery reached the {Limit} limit before the lead list was ready. DiscoveryId={DiscoveryId}",
-                    DiscoveryTimeLimit, id);
-                discovery = new SupplierDiscoveryResult([], 0, 0, "partial", true);
-            }
+                    run.UpdateProgress(progress.Stage, progress.CompletedCandidates, progress.TotalCandidates);
+                    await db.SaveChangesAsync(jobToken);
+                }
+                finally
+                {
+                    progressGate.Release();
+                }
+            });
 
-            token.ThrowIfCancellationRequested();
-            if (deadline.IsCancellationRequested && !discovery.TimeLimitReached)
-                discovery = discovery with { Outcome = "partial", TimeLimitReached = true };
+            jobToken.ThrowIfCancellationRequested();
 
             run.UpdateProgress("saving", run.CompletedCandidates, run.CandidateCount);
             await db.SaveChangesAsync(token);
 
             var response = await services.GetRequiredService<DiscoveryPersistence>().SaveAsync(run,
-                discovery.Candidates, discovery.FailedProfileCount, token, discovery.Outcome, discovery.SourcePageCount,
-                discovery.TimeLimitReached);
+                discovery.Candidates, discovery.FailedProfileCount, jobToken, discovery.Outcome, discovery.SourcePageCount);
             logger.LogInformation("Discovery completed. DiscoveryId={DiscoveryId}, Accepted={Accepted}, FailedProfiles={FailedProfiles}, Outcome={Outcome}",
                 id, response.AcceptedCount, response.FailedProfileCount, response.Outcome);
         }
-        catch (AiProviderException exception)
+        catch (AiProviderException exception) when (!jobToken.IsCancellationRequested)
         {
             run.Fail(ToErrorCode(exception.Code), DateTimeOffset.UtcNow, exception.Stage);
             await db.SaveChangesAsync(token);
@@ -114,12 +129,26 @@ public sealed class DiscoveryBackgroundWorker(
         {
             throw;
         }
+        catch (OperationCanceledException) when (jobToken.IsCancellationRequested)
+        {
+            run.Cancel(DateTimeOffset.UtcNow);
+            await db.SaveChangesAsync(token);
+        }
+        catch (Exception) when (jobToken.IsCancellationRequested)
+        {
+            run.Cancel(DateTimeOffset.UtcNow);
+            await db.SaveChangesAsync(token);
+        }
         catch (Exception exception)
         {
             logger.LogError("Discovery job failed. DiscoveryId={DiscoveryId}, ErrorType={ErrorType}",
                 id, exception.GetType().Name);
             run.Fail("INTERNAL_ERROR", DateTimeOffset.UtcNow, "processing");
             await db.SaveChangesAsync(token);
+        }
+        finally
+        {
+            _activeJobs.TryRemove(id, out _);
         }
     }
 
@@ -128,7 +157,7 @@ public sealed class DiscoveryBackgroundWorker(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var run = await db.DiscoveryRuns.SingleOrDefaultAsync(item => item.Id == id, token);
-        if (run is null || run.Status is "failed" or "succeeded") return;
+        if (run is null || run.Status is "failed" or "succeeded" or "cancelled") return;
         if (run.Status == "queued") run.MarkStarted();
         run.Fail("INTERNAL_ERROR", DateTimeOffset.UtcNow, "worker");
         await db.SaveChangesAsync(token);

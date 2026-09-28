@@ -70,6 +70,13 @@ public static class SupplierCatalogEndpoints
             .Produces<SupplierDetailsResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
+        routes.MapDelete("/suppliers/{id:guid}", DeleteAsync)
+            .WithName("DeleteSupplier")
+            .WithTags("Suppliers")
+            .WithSummary("Полностью удаляет поставщика и связанные сведения")
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
         routes.MapPut("/suppliers/{id:guid}/favorite", SetFavoriteAsync)
             .WithName("SetSupplierFavorite")
             .WithTags("Suppliers")
@@ -193,6 +200,27 @@ public static class SupplierCatalogEndpoints
         return supplier is null
             ? ProblemResponses.Create(context, StatusCodes.Status404NotFound, "Поставщик не найден", "NOT_FOUND")
             : Results.Ok(SupplierCatalogMapper.ToDetails(supplier));
+    }
+
+    private static async Task<IResult> DeleteAsync(Guid id, HttpContext context, ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (!await db.Suppliers.AnyAsync(item => item.Id == id, cancellationToken))
+            return ProblemResponses.Create(context, StatusCodes.Status404NotFound, "Поставщик не найден", "NOT_FOUND");
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await db.Suppliers.Where(item => item.Id == id)
+            .ExecuteUpdateAsync(update => update.SetProperty(item => item.CurrentNameFactId, (Guid?)null), cancellationToken);
+        await db.SupplierPrices.Where(item => item.Product.SupplierId == id).ExecuteDeleteAsync(cancellationToken);
+        await db.SupplierImages.Where(item => item.SupplierId == id).ExecuteDeleteAsync(cancellationToken);
+        var deleted = await db.Suppliers.Where(item => item.Id == id).ExecuteDeleteAsync(cancellationToken);
+        if (deleted == 0)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return ProblemResponses.Create(context, StatusCodes.Status404NotFound, "Поставщик не найден", "NOT_FOUND");
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return Results.NoContent();
     }
 
     private static async Task<IResult> SetFavoriteAsync(Guid id, SupplierFavoriteRequest? request,

@@ -26,9 +26,11 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
         if (!adapter.SupportsModel(setting.Model))
             throw new AiProviderException(ProviderFailureCode.UnsupportedModel);
 
-        var promptSetting = await db.AiProviderPromptSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.ProviderId == "discovery", cancellationToken);
-        var basePrompt = promptSetting?.Prompt ?? AiProviderPromptDefaults.Shared;
+        var promptSettings = await db.AiProviderPromptSettings.AsNoTracking()
+            .Where(item => item.ProviderId == "discovery" || item.ProviderId == "discovery-profile")
+            .ToDictionaryAsync(item => item.ProviderId, item => item.Prompt, cancellationToken);
+        var basePrompt = promptSettings.GetValueOrDefault("discovery", AiProviderPromptDefaults.Shared);
+        var profilePrompt = promptSettings.GetValueOrDefault("discovery-profile", AiProviderPromptDefaults.Profile);
 
         string apiKey;
         try
@@ -41,6 +43,6 @@ public sealed class ConfiguredSupplierDiscoveryProvider(
         }
 
         return await discoveryService.DiscoverAsync(adapter, setting.Model, apiKey, setting.RouteProvider,
-            basePrompt, query, filters, limit, cancellationToken, progress);
+            basePrompt, profilePrompt, query, filters, limit, cancellationToken, progress);
     }
 }

@@ -12,6 +12,7 @@ COPY backend/ ./backend/
 RUN dotnet publish ./backend/Api/Goulash.Api.csproj --configuration Release --output /app/publish --no-restore /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
+RUN apk add --no-cache krb5-libs
 WORKDIR /app
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

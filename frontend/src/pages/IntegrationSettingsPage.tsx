@@ -25,6 +25,7 @@ export function IntegrationSettingsPage() {
   const [model, setModel] = useState('')
   const [routeProvider, setRouteProvider] = useState('')
   const [basePrompt, setBasePrompt] = useState('')
+  const [profilePrompt, setProfilePrompt] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -52,6 +53,7 @@ export function IntegrationSettingsPage() {
         setModel(savedSettings.model ?? getRecommendedModel(initialProvider))
         setRouteProvider(savedSettings.routeProvider ?? '')
         setBasePrompt(savedSettings.basePrompt ?? initialProvider?.basePrompt ?? initialProvider?.defaultBasePrompt ?? '')
+        setProfilePrompt(savedSettings.profilePrompt ?? initialProvider?.profilePrompt ?? initialProvider?.defaultProfilePrompt ?? '')
       })
       .catch(() => {
         if (active) setLoadError('Не удалось загрузить список провайдеров и сохранённые настройки.')
@@ -71,7 +73,7 @@ export function IntegrationSettingsPage() {
   const hasUnsavedChanges = Boolean(settings) && (
     providerId !== settings?.providerId || model !== settings?.model ||
     routeProvider !== (settings?.routeProvider ?? '') ||
-    basePrompt !== (settings?.basePrompt ?? '') || apiKey.length > 0
+    basePrompt !== (settings?.basePrompt ?? '') || profilePrompt !== (settings?.profilePrompt ?? '') || apiKey.length > 0
   )
   const canCheck = Boolean(settings?.hasApiKey) && !hasUnsavedChanges && !checking && !saving && !deleting
 
@@ -95,6 +97,10 @@ export function IntegrationSettingsPage() {
       setFormError('Базовый промпт не может быть пустым.')
       return
     }
+    if (!profilePrompt.trim()) {
+      setFormError('Промпт анализа профиля не может быть пустым.')
+      return
+    }
     if (needsNewKey && apiKey.trim().length === 0) {
       setFormError('Для выбранного провайдера введите API-ключ.')
       return
@@ -107,6 +113,7 @@ export function IntegrationSettingsPage() {
         providerId,
         model: model.trim(),
         basePrompt,
+        profilePrompt,
         ...(selectedProvider.supportsProviderRouting ? { routeProvider: routeProvider.trim() } : {}),
         ...(apiKey.length > 0 ? { apiKey } : {}),
       })
@@ -115,8 +122,11 @@ export function IntegrationSettingsPage() {
       setModel(saved.model ?? '')
       setRouteProvider(saved.routeProvider ?? '')
       setBasePrompt(saved.basePrompt ?? selectedProvider.defaultBasePrompt)
+      setProfilePrompt(saved.profilePrompt ?? selectedProvider.defaultProfilePrompt)
       setProviders((current) => current.map((provider) => ({
-        ...provider, basePrompt: saved.basePrompt ?? provider.defaultBasePrompt,
+        ...provider,
+        basePrompt: saved.basePrompt ?? provider.defaultBasePrompt,
+        profilePrompt: saved.profilePrompt ?? provider.defaultProfilePrompt,
       })))
       setApiKey('')
     } catch (cause) {
@@ -297,9 +307,7 @@ export function IntegrationSettingsPage() {
               <FormField
                 id="base-prompt"
                 label="Базовый промпт"
-                hint={selectedProvider?.id === 'polza'
-                  ? 'Применяется при извлечении данных из найденных страниц. Сам веб-поиск строится по запросу и фильтрам.'
-                  : 'Инструкция передаётся модели вместе с запросом и фильтрами при поиске поставщиков.'}
+                hint="Общая системная инструкция для обоих этапов. Пользовательский промпт извлечения профиля редактируется отдельно ниже."
               >
                 <textarea
                   id="base-prompt"
@@ -322,6 +330,42 @@ export function IntegrationSettingsPage() {
                     type="button"
                     onClick={() => {
                       setBasePrompt(selectedProvider?.defaultBasePrompt ?? '')
+                      setFormError(null)
+                      setCheckState(null)
+                    }}
+                    disabled={saving || deleting || checking || !selectedProvider}
+                  >
+                    Восстановить стандартный
+                  </button>
+                </div>
+              </FormField>
+
+              <FormField
+                id="profile-prompt"
+                label="Промпт анализа профиля поставщика"
+                hint="Это текст второго запроса к модели. Переменные {{supplierName}}, {{websiteUrl}} и {{websitePages}} автоматически заменяются данными найденного поставщика и страниц сайта."
+              >
+                <textarea
+                  id="profile-prompt"
+                  className="text-input textarea-input"
+                  rows={14}
+                  maxLength={8000}
+                  value={profilePrompt}
+                  onChange={(event) => {
+                    setProfilePrompt(event.target.value)
+                    setFormError(null)
+                    setCheckState(null)
+                  }}
+                  disabled={saving || deleting || checking}
+                  required
+                />
+                <div className="form-actions">
+                  <span className="inline-note">{profilePrompt.length} / 8000</span>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => {
+                      setProfilePrompt(selectedProvider?.defaultProfilePrompt ?? '')
                       setFormError(null)
                       setCheckState(null)
                     }}

@@ -119,7 +119,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISupplierDiscoveryProvider, ConfiguredSupplierDiscoveryProvider>();
 builder.Services.AddScoped<DiscoveryPersistence>();
 builder.Services.AddSingleton<DiscoveryJobQueue>();
-builder.Services.AddHostedService<DiscoveryBackgroundWorker>();
+builder.Services.AddSingleton<DiscoveryBackgroundWorker>();
+builder.Services.AddHostedService(services => services.GetRequiredService<DiscoveryBackgroundWorker>());
 
 var app = builder.Build();
 

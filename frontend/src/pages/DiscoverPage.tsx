@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
   ApiError,
+  cancelDiscovery,
+  deleteSupplier,
   discoverSuppliers,
+  getActiveDiscovery,
   getDiscoveryStatus,
   getAiSettings,
   setSupplierFavorite,
@@ -29,7 +32,6 @@ type DiscoveryForm = {
   maxMinimumOrder: string
   minimumOrderUnit: string
 }
-
 type SearchSnapshot = {
   request: DiscoverySearchRequest
   summary: string[]
@@ -37,7 +39,7 @@ type SearchSnapshot = {
   errors: Record<string, string>
 }
 
-type ActiveSearch = { controller: AbortController }
+type ActiveSearch = { controller: AbortController; discoveryId: string | null }
 type DiscoveryFailure = { title: string; message: string; code: string }
 
 const initialForm: DiscoveryForm = {
@@ -65,6 +67,8 @@ export function DiscoverPage() {
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsError, setSettingsError] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [activeSearchChecked, setActiveSearchChecked] = useState(false)
+  const [cancelPending, setCancelPending] = useState(false)
   const [filtersExpanded, setFiltersExpanded] = useState(false)
   const [jobProgress, setJobProgress] = useState<{ stage: string; completed: number; total: number }>({ stage: 'queued', completed: 0, total: 0 })
   const [failure, setFailure] = useState<DiscoveryFailure | null>(null)
@@ -73,6 +77,7 @@ export function DiscoverPage() {
   const [lastRunSnapshot, setLastRunSnapshot] = useState<SearchSnapshot | null>(null)
   const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set())
   const [favoriteError, setFavoriteError] = useState(false)
+  const [deletePending, setDeletePending] = useState<Set<string>>(() => new Set())
 
   const activeSearchRef = useRef<ActiveSearch | null>(null)
   const mountedRef = useRef(true)
@@ -102,6 +107,46 @@ export function DiscoverPage() {
   }, [])
 
   useEffect(() => {
+    const controller = new AbortController()
+    let active = true
+    getActiveDiscovery(controller.signal)
+      .then((job) => {
+        if (!active) return
+        if (!job) return
+        const search: ActiveSearch = { controller, discoveryId: job.discoveryId }
+        activeSearchRef.current = search
+        setLoading(true)
+        setFailure(null)
+        setJobProgress({ stage: job.stage, completed: job.completedCandidates, total: job.candidateCount })
+        void monitorSearch(job.discoveryId, search, null)
+          .catch((cause: unknown) => {
+            if (active && !(cause instanceof DOMException && cause.name === 'AbortError')) {
+              setFailure(describeDiscoveryFailure(cause))
+            }
+          })
+          .finally(() => {
+            if (activeSearchRef.current === search) activeSearchRef.current = null
+            if (active) {
+              setLoading(false)
+              setCancelPending(false)
+            }
+          })
+      })
+      .catch((cause: unknown) => {
+        if (active && !(cause instanceof ApiError && cause.status === 401)) {
+          setFailure(describeDiscoveryFailure(cause))
+        }
+      })
+      .finally(() => {
+        if (active) setActiveSearchChecked(true)
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [])
+
+  useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
@@ -121,7 +166,7 @@ export function DiscoverPage() {
     if (activeSearchRef.current || !canSearchRef.current || !snapshot.hasSubstantiveConditions ||
       Object.keys(snapshot.errors).length > 0) return
     const controller = new AbortController()
-    const activeSearch: ActiveSearch = { controller }
+    const activeSearch: ActiveSearch = { controller, discoveryId: null }
     activeSearchRef.current = activeSearch
     setLoading(true)
     setFailure(null)
@@ -129,37 +174,69 @@ export function DiscoverPage() {
     setJobProgress({ stage: 'queued', completed: 0, total: 0 })
     setLastRunSnapshot(snapshot)
 
-    void (async (): Promise<DiscoverySearchResponse | null> => {
-      const accepted = await discoverSuppliers(snapshot.request, controller.signal)
-      let job = await getDiscoveryStatus(accepted.discoveryId, controller.signal)
-      while (job.status === 'queued' || job.status === 'running') {
-        if (!mountedRef.current || controller.signal.aborted) return null
-        setJobProgress({ stage: job.stage, completed: job.completedCandidates, total: job.candidateCount })
-        await new Promise((resolve) => window.setTimeout(resolve, 1200))
-        job = await getDiscoveryStatus(accepted.discoveryId, controller.signal)
-      }
-      if (job.status === 'failed') {
-        const status = job.errorCode === 'PROVIDER_TIMEOUT' ? 504 :
-          job.errorCode === 'PROVIDER_NOT_CONFIGURED' ? 409 : 502
-        throw new ApiError('Поиск не завершился', status, job.errorCode ?? 'PROVIDER_UNAVAILABLE')
-      }
-      if (!job.result) throw new ApiError('Сервер не вернул результаты поиска', 502, 'INVALID_RESPONSE')
-      return job.result
-    })()
-      .then((result) => {
-        if (result === null || !mountedRef.current || controller.signal.aborted) return
-        setResponse(result)
-        setResultSnapshot(snapshot)
-      })
-      .catch((cause: unknown) => {
+    void (async () => {
+      try {
+        let id: string
+        let trackedSnapshot: SearchSnapshot | null = snapshot
+        try {
+          id = (await discoverSuppliers(snapshot.request, controller.signal)).discoveryId
+        } catch (cause) {
+          if (!(cause instanceof ApiError && cause.code === 'DISCOVERY_ALREADY_RUNNING')) throw cause
+          const existing = await getActiveDiscovery(controller.signal)
+          if (!existing) throw cause
+          id = existing.discoveryId
+          trackedSnapshot = null
+          setLastRunSnapshot(null)
+        }
+        activeSearch.discoveryId = id
+        await monitorSearch(id, activeSearch, trackedSnapshot)
+      } catch (cause) {
         if (!mountedRef.current || controller.signal.aborted) return
         setFailure(describeDiscoveryFailure(cause))
-      })
-      .finally(() => {
-        if (activeSearchRef.current !== activeSearch) return
-        activeSearchRef.current = null
-        if (mountedRef.current) setLoading(false)
-      })
+      } finally {
+        if (activeSearchRef.current === activeSearch) {
+          activeSearchRef.current = null
+          if (mountedRef.current) {
+            setLoading(false)
+            setCancelPending(false)
+          }
+        }
+      }
+    })()
+  }
+
+  async function monitorSearch(id: string, activeSearch: ActiveSearch, snapshot: SearchSnapshot | null) {
+    let job = await getDiscoveryStatus(id, activeSearch.controller.signal)
+    while (job.status === 'queued' || job.status === 'running') {
+      if (!mountedRef.current || activeSearch.controller.signal.aborted) return
+      setJobProgress({ stage: job.stage, completed: job.completedCandidates, total: job.candidateCount })
+      await new Promise((resolve) => window.setTimeout(resolve, 1200))
+      job = await getDiscoveryStatus(id, activeSearch.controller.signal)
+    }
+    if (job.status === 'cancelled') {
+      setFailure({ title: 'Поиск отменён', message: 'Задача остановлена. Теперь можно запустить новый поиск.', code: 'DISCOVERY_CANCELLED' })
+      return
+    }
+    if (job.status === 'failed') {
+      const status = job.errorCode === 'PROVIDER_TIMEOUT' ? 504 :
+        job.errorCode === 'PROVIDER_NOT_CONFIGURED' ? 409 : 502
+      throw new ApiError('Поиск не завершился', status, job.errorCode ?? 'PROVIDER_UNAVAILABLE')
+    }
+    if (!job.result) throw new ApiError('Сервер не вернул результаты поиска', 502, 'INVALID_RESPONSE')
+    setResponse(job.result)
+    setResultSnapshot(snapshot)
+  }
+
+  async function cancelSearch() {
+    const active = activeSearchRef.current
+    if (!active?.discoveryId || cancelPending) return
+    setCancelPending(true)
+    try {
+      await cancelDiscovery(active.discoveryId)
+    } catch (cause) {
+      setCancelPending(false)
+      if (mountedRef.current) setFailure(describeDiscoveryFailure(cause))
+    }
   }
 
   function handleImmediateSearch() {
@@ -198,9 +275,30 @@ export function DiscoverPage() {
     }
   }
 
+  async function removeSupplier(id: string, name: string) {
+    if (!window.confirm(`Удалить поставщика «${name}» и все связанные сведения из базы?`)) return
+    setDeletePending((current) => new Set(current).add(id))
+    try {
+      await deleteSupplier(id)
+      setResponse((current) => current ? {
+        ...current,
+        items: current.items.filter((item) => item.id !== id),
+        acceptedCount: Math.max(0, current.acceptedCount - 1),
+      } : current)
+    } catch {
+      setFailure({ title: 'Не удалось удалить поставщика', message: 'Обновите страницу и попробуйте ещё раз.', code: 'DELETE_FAILED' })
+    } finally {
+      setDeletePending((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
   if (settingsLoading) return <PageLoading label="Проверяем настройки поиска…" />
 
-  const canSubmitCurrent = canSearch && latestSnapshot.hasSubstantiveConditions &&
+  const canSubmitCurrent = activeSearchChecked && canSearch && latestSnapshot.hasSubstantiveConditions &&
     Object.keys(currentErrors).length === 0 && !loading
 
   return (
@@ -362,7 +460,7 @@ export function DiscoverPage() {
         </form>
       </Card>
 
-      {loading && lastRunSnapshot && (
+      {loading && (
         <Card className="discover-running-card">
           <div aria-live="polite" role="status">
             <div className="discover-running-heading">
@@ -370,8 +468,12 @@ export function DiscoverPage() {
               <span>{jobProgress.stage === 'enriching' && jobProgress.total > 0
                 ? `Исследовано ${jobProgress.completed} из ${jobProgress.total} сайтов`
                 : 'Поиск выполняется на сервере'}</span>
+              <button className="button danger-quiet" type="button" disabled={cancelPending || !activeSearchRef.current?.discoveryId}
+                onClick={() => void cancelSearch()}>
+                {cancelPending ? 'Останавливаем…' : 'Отменить'}
+              </button>
             </div>
-            <SearchParameters snapshot={lastRunSnapshot} />
+            {lastRunSnapshot && <SearchParameters snapshot={lastRunSnapshot} />}
           </div>
         </Card>
       )}
@@ -398,7 +500,7 @@ export function DiscoverPage() {
         </ErrorNotice>
       )}
 
-      {response && resultSnapshot && (
+      {response && (
         <section className="discover-results" aria-live="polite">
           <div className="discover-results-heading">
             <div>
@@ -408,12 +510,7 @@ export function DiscoverPage() {
             </div>
             <span className="discover-result-count">{response.acceptedCount} найдено</span>
           </div>
-          <SearchParameters snapshot={resultSnapshot} />
-          {response.timeLimitReached && (
-            <p className="discover-rejected-count" role="status">
-              Поиск завершён по лимиту в 2 минуты. Показаны поставщики, которых удалось обработать к этому моменту.
-            </p>
-          )}
+          {resultSnapshot && <SearchParameters snapshot={resultSnapshot} />}
           {response.failedProfileCount > 0 && (
             <p className="discover-rejected-count" role="status">
               Для {response.failedProfileCount} поставщиков не удалось получить полный профиль. Показаны данные из первичного поиска.
@@ -439,7 +536,6 @@ export function DiscoverPage() {
                         <h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>{item.name}</Link></h3>
                         <p className="discovery-card-location">{item.city ?? 'Местоположение не указано'}</p>
                       </div>
-                      {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть сведения, извлечённые моделью</span>}
                     </div>
 
                     {item.products.length > 0 && (
@@ -462,7 +558,6 @@ export function DiscoverPage() {
                       </div>
                     )}
 
-                    {item.lastDiscoveredAt && <p className="discovery-collected-date">Собрано {formatDate(item.lastDiscoveredAt)}</p>}
                   </div>
 
                   <div className="discovery-card-actions">
@@ -478,6 +573,10 @@ export function DiscoverPage() {
                       <span>{item.isFavorite ? 'В избранном' : 'В избранное'}</span>
                     </button>
                     <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>Подробнее</Link>
+                    <button className="button danger-quiet" type="button" disabled={deletePending.has(item.id)}
+                      onClick={() => void removeSupplier(item.id, item.name)}>
+                      {deletePending.has(item.id) ? 'Удаляем…' : 'Удалить'}
+                    </button>
                   </div>
                 </Card>
               ))}
@@ -635,8 +734,4 @@ function describeDiscoveryFailure(cause: unknown): DiscoveryFailure {
     return { title: 'Не удалось выполнить поиск', message: cause.detail ?? 'Проверьте подключение и повторите поиск.', code: cause.code }
   }
   return { title: 'Сервис поиска недоступен', message: 'Проверьте подключение и попробуйте ещё раз.', code: 'NETWORK_ERROR' }
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(new Date(value))
 }

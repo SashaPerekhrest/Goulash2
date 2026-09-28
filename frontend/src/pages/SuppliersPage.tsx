@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import {
   ApiError,
+  deleteSupplier,
   getSuppliers,
   setSupplierFavorite,
   type SupplierCatalogPage,
@@ -47,7 +48,9 @@ export function SuppliersPage() {
   const [error, setError] = useState<string | null>(null)
   const [favoriteError, setFavoriteError] = useState<string | null>(null)
   const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set())
+  const [deletePending, setDeletePending] = useState<Set<string>>(() => new Set())
   const [revision, setRevision] = useState(0)
+  const [filtersExpanded, setFiltersExpanded] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -116,6 +119,26 @@ export function SuppliersPage() {
     }
   }
 
+  async function removeSupplier(id: string, name: string) {
+    if (!window.confirm(`Удалить поставщика «${name}» и все связанные сведения из базы?`)) return
+    setDeletePending((current) => new Set(current).add(id))
+    setError(null)
+    try {
+      await deleteSupplier(id)
+      setRevision((value) => value + 1)
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 404
+        ? 'Поставщик уже удалён.'
+        : 'Не удалось удалить поставщика. Обновите список и попробуйте ещё раз.')
+    } finally {
+      setDeletePending((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
   const read = (key: string, fallback = '') => searchParams.get(key) ?? fallback
   const isFiltered = substantiveFilterKeys.some((key) => {
     const value = requestParams.get(key)
@@ -138,7 +161,13 @@ export function SuppliersPage() {
       <Card className="catalog-filter-card">
         <div className="catalog-filter-heading">
           <div><span className="section-kicker">ПОИСК ПО БАЗЕ</span><h2>Найдите подходящих поставщиков</h2></div>
-          <button className="button quiet" type="button" onClick={() => setSearchParams({}, { replace: true })}>Сбросить фильтры</button>
+          <div className="catalog-filter-actions">
+            <button className="button secondary" type="button" aria-expanded={filtersExpanded} aria-controls="catalog-filters"
+              onClick={() => setFiltersExpanded((expanded) => !expanded)}>
+              Фильтры <span aria-hidden="true">{filtersExpanded ? '−' : '+'}</span>
+            </button>
+            <button className="button quiet" type="button" onClick={() => setSearchParams({}, { replace: true })}>Сбросить фильтры</button>
+          </div>
         </div>
         <div className="catalog-query-row">
           <FormField id="catalog-query" label="Название или товар">
@@ -147,6 +176,7 @@ export function SuppliersPage() {
               onChange={(event) => updateParam('q', event.target.value)} />
           </FormField>
         </div>
+        {filtersExpanded && <div id="catalog-filters" className="catalog-filter-panel">
         <div className="catalog-filter-grid">
           <FormField id="catalog-city" label="Город"><input id="catalog-city" className="text-input" maxLength={160} value={read('city')} onChange={(event) => updateParam('city', event.target.value)} /></FormField>
           <FormField id="catalog-region" label="Регион"><input id="catalog-region" className="text-input" maxLength={160} value={read('region')} onChange={(event) => updateParam('region', event.target.value)} /></FormField>
@@ -198,6 +228,7 @@ export function SuppliersPage() {
             </select>
           </FormField>
         </div>
+        </div>}
       </Card>
 
       {favoriteError && <ErrorNotice title={favoriteError}>Попробуйте изменить избранное ещё раз.</ErrorNotice>}
@@ -229,7 +260,6 @@ export function SuppliersPage() {
               <div className="discovery-card-heading">
                 <div><h3><Link to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>{item.name}</Link></h3>
                   <p className="discovery-card-location">{item.city ?? 'Город не указан'}</p></div>
-                {item.hasUnconfirmedData && <span className="unconfirmed-badge">Есть сведения, извлечённые моделью</span>}
               </div>
               <div className="discovery-products" aria-label="Товары">
                 {item.products.length > 0 ? item.products.map((product, index) => <span className="product-chip" key={`${product}-${index}`}>{product}</span>) : <span className="catalog-no-products">Товары не указаны</span>}
@@ -242,7 +272,6 @@ export function SuppliersPage() {
                 {item.websiteUrl && <SafeExternalLink className="safe-external-link" href={item.websiteUrl}>Открыть сайт</SafeExternalLink>}
                 {item.contactPreview && <span>{item.contactPreview}</span>}
               </div>}
-              {item.lastDiscoveredAt && <p className="discovery-collected-date">Собрано {formatDate(item.lastDiscoveredAt)}</p>}
             </div>
             <div className="discovery-card-actions">
               <button className={item.isFavorite ? 'favorite-button selected' : 'favorite-button'} type="button"
@@ -253,6 +282,10 @@ export function SuppliersPage() {
                 <span>{favoritePending.has(item.id) ? 'Сохраняем…' : item.isFavorite ? 'В избранном' : 'В избранное'}</span>
               </button>
               <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>Подробнее</Link>
+              <button className="button danger-quiet" type="button" disabled={deletePending.has(item.id)}
+                onClick={() => void removeSupplier(item.id, item.name)}>
+                {deletePending.has(item.id) ? 'Удаляем…' : 'Удалить'}
+              </button>
             </div>
           </Card>)}
         </div>}
@@ -267,11 +300,6 @@ export function SuppliersPage() {
       </section>}
     </section>
   )
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'Дата неизвестна' : new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium' }).format(date)
 }
 
 function supplierCountLabel(count: number): string {

@@ -45,14 +45,16 @@ public static class AiSettingsEndpoints
     private static async Task<IResult> GetProvidersAsync(ApplicationDbContext db, IAiProviderRegistry registry,
         HttpContext context, CancellationToken cancellationToken)
     {
-        var prompt = await db.AiProviderPromptSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.ProviderId == "discovery", cancellationToken);
+        var prompts = await db.AiProviderPromptSettings.AsNoTracking()
+            .Where(item => item.ProviderId == "discovery" || item.ProviderId == "discovery-profile")
+            .ToDictionaryAsync(item => item.ProviderId, item => item.Prompt, cancellationToken);
         context.Response.Headers.CacheControl = "no-store";
         var items = registry.WebSearchProviders.Select(provider =>
         {
             return new ProviderResponse(provider.Id, provider.DisplayName, true, provider.SupportedModels,
                 provider.SupportsFreeformModel, provider.SupportsProviderRouting,
-                prompt?.Prompt ?? AiProviderPromptDefaults.Shared, AiProviderPromptDefaults.Shared);
+                prompts.GetValueOrDefault("discovery", AiProviderPromptDefaults.Shared), AiProviderPromptDefaults.Shared,
+                prompts.GetValueOrDefault("discovery-profile", AiProviderPromptDefaults.Profile), AiProviderPromptDefaults.Profile);
         });
         return Results.Ok(new { items });
     }
@@ -62,10 +64,13 @@ public static class AiSettingsEndpoints
     {
         var setting = await db.AiProviderSettings.AsNoTracking()
             .SingleOrDefaultAsync(item => item.Id == AiProviderSetting.SingletonId, cancellationToken);
-        var promptSetting = await db.AiProviderPromptSettings.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.ProviderId == "discovery", cancellationToken);
+        var prompts = await db.AiProviderPromptSettings.AsNoTracking()
+            .Where(item => item.ProviderId == "discovery" || item.ProviderId == "discovery-profile")
+            .ToDictionaryAsync(item => item.ProviderId, item => item.Prompt, cancellationToken);
         context.Response.Headers.CacheControl = "no-store";
-        return Results.Ok(ToResponse(setting, promptSetting?.Prompt ?? AiProviderPromptDefaults.Shared));
+        return Results.Ok(ToResponse(setting,
+            prompts.GetValueOrDefault("discovery", AiProviderPromptDefaults.Shared),
+            prompts.GetValueOrDefault("discovery-profile", AiProviderPromptDefaults.Profile)));
     }
 
     private static async Task<IResult> UpdateSettingsAsync(
@@ -90,6 +95,10 @@ public static class AiSettingsEndpoints
             (string.IsNullOrWhiteSpace(requestedPrompt) || requestedPrompt.Length > 8000))
             return ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
                 "Промпт должен содержать текст и не превышать 8000 символов", "VALIDATION_ERROR");
+        if (request.ProfilePrompt is { } requestedProfilePrompt &&
+            (string.IsNullOrWhiteSpace(requestedProfilePrompt) || requestedProfilePrompt.Length > 8000))
+            return ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
+                "Промпт профиля должен содержать текст и не превышать 8000 символов", "VALIDATION_ERROR");
 
         var routeProvider = string.IsNullOrWhiteSpace(request.RouteProvider) ? null : request.RouteProvider.Trim();
         if (routeProvider is { Length: > 120 } || routeProvider?.Any(char.IsControl) == true ||
@@ -111,8 +120,11 @@ public static class AiSettingsEndpoints
 
         var setting = await db.AiProviderSettings
             .SingleOrDefaultAsync(item => item.Id == AiProviderSetting.SingletonId, cancellationToken);
-        var promptSetting = await db.AiProviderPromptSettings
-            .SingleOrDefaultAsync(item => item.ProviderId == "discovery", cancellationToken);
+        var promptSettings = await db.AiProviderPromptSettings
+            .Where(item => item.ProviderId == "discovery" || item.ProviderId == "discovery-profile")
+            .ToDictionaryAsync(item => item.ProviderId, cancellationToken);
+        promptSettings.TryGetValue("discovery", out var promptSetting);
+        promptSettings.TryGetValue("discovery-profile", out var profilePromptSetting);
         if (AiSettingsKeyPolicy.RequiresNewKey(setting, request.ProviderId, apiKey))
             return ProblemResponses.Create(context, StatusCodes.Status409Conflict,
                 "Для этого провайдера требуется новый API-ключ", "API_KEY_REQUIRED");
@@ -121,9 +133,13 @@ public static class AiSettingsEndpoints
 
         var now = DateTimeOffset.UtcNow;
         var basePrompt = request.BasePrompt ?? promptSetting?.Prompt ?? AiProviderPromptDefaults.Shared;
+        var profilePrompt = request.ProfilePrompt ?? profilePromptSetting?.Prompt ?? AiProviderPromptDefaults.Profile;
         if (string.IsNullOrWhiteSpace(basePrompt) || basePrompt.Length > 8000)
             return ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
                 "Для провайдера не настроен корректный базовый промпт", "VALIDATION_ERROR");
+        if (string.IsNullOrWhiteSpace(profilePrompt) || profilePrompt.Length > 8000)
+            return ProblemResponses.Create(context, StatusCodes.Status400BadRequest,
+                "Для анализа профиля не настроен корректный промпт", "VALIDATION_ERROR");
 
         if (setting is null)
             db.AiProviderSettings.Add(new AiProviderSetting(request.ProviderId, request.Model, encryptedApiKey, now, routeProvider));
@@ -134,11 +150,15 @@ public static class AiSettingsEndpoints
             db.AiProviderPromptSettings.Add(new AiProviderPromptSetting("discovery", basePrompt, now));
         else if (request.BasePrompt is not null)
             promptSetting.Update(basePrompt, now);
+        if (profilePromptSetting is null)
+            db.AiProviderPromptSettings.Add(new AiProviderPromptSetting("discovery-profile", profilePrompt, now));
+        else if (request.ProfilePrompt is not null)
+            profilePromptSetting.Update(profilePrompt, now);
 
         await db.SaveChangesAsync(cancellationToken);
         context.Response.Headers.CacheControl = "no-store";
         return Results.Ok(ToResponse(setting ?? await db.AiProviderSettings.AsNoTracking()
-            .SingleAsync(item => item.Id == AiProviderSetting.SingletonId, cancellationToken), basePrompt));
+            .SingleAsync(item => item.Id == AiProviderSetting.SingletonId, cancellationToken), basePrompt, profilePrompt));
     }
 
     private static async Task<IResult> DeleteApiKeyAsync(ApplicationDbContext db, CancellationToken cancellationToken)
@@ -202,9 +222,9 @@ public static class AiSettingsEndpoints
         }
     }
 
-    private static AiSettingsResponse ToResponse(AiProviderSetting? setting, string? basePrompt) => setting is null
-        ? new AiSettingsResponse(null, null, null, basePrompt, false, null, null)
-        : new AiSettingsResponse(setting.ProviderId, setting.Model, setting.RouteProvider, basePrompt,
+    private static AiSettingsResponse ToResponse(AiProviderSetting? setting, string? basePrompt, string? profilePrompt) => setting is null
+        ? new AiSettingsResponse(null, null, null, basePrompt, profilePrompt, false, null, null)
+        : new AiSettingsResponse(setting.ProviderId, setting.Model, setting.RouteProvider, basePrompt, profilePrompt,
             setting.EncryptedApiKey is not null, setting.EncryptedApiKey is null ? null : "••••••••", setting.UpdatedAt);
 
     private static IResult ToProviderProblem(HttpContext context, ProviderFailureCode code) => code switch
@@ -223,11 +243,11 @@ public static class AiSettingsEndpoints
 
     private sealed record ProviderResponse(string Id, string DisplayName, bool SupportsWebSearch,
         IReadOnlyCollection<string> Models, bool SupportsFreeformModel, bool SupportsProviderRouting,
-        string BasePrompt, string DefaultBasePrompt);
+        string BasePrompt, string DefaultBasePrompt, string ProfilePrompt, string DefaultProfilePrompt);
 }
 
 public sealed record UpdateAiSettingsRequest(string? ProviderId, string? Model, JsonElement? ApiKey,
-    string? RouteProvider = null, string? BasePrompt = null);
-public sealed record AiSettingsResponse(string? ProviderId, string? Model, string? RouteProvider, string? BasePrompt,
+    string? RouteProvider = null, string? BasePrompt = null, string? ProfilePrompt = null);
+public sealed record AiSettingsResponse(string? ProviderId, string? Model, string? RouteProvider, string? BasePrompt, string? ProfilePrompt,
     bool HasApiKey, string? ApiKeyMask, DateTimeOffset? UpdatedAt);
 public sealed record ProviderCheckResponse(bool Connected, bool WebSearchAvailable, DateTimeOffset CheckedAt);

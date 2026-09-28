@@ -21,6 +21,7 @@ public sealed record DiscoveryFiltersRequest(
 public sealed record DiscoveryPriceRequest(JsonElement? Min, JsonElement? Max, string? Currency, string? Unit);
 public sealed record DiscoveryMinimumOrderRequest(JsonElement? Amount, string? Unit);
 public sealed record DiscoveryJobAccepted(Guid DiscoveryId, string Status);
+public sealed record DiscoveryCancellationResponse(Guid DiscoveryId, string Status);
 public sealed record DiscoveryJobStatusResponse(Guid DiscoveryId, string Status, string Stage, int CandidateCount,
     int CompletedCandidates, int AcceptedCount, int FailedProfileCount, string? ErrorCode,
     SupplierDiscoveryResponse? Result);
@@ -40,6 +41,15 @@ public static class DiscoveryEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status502BadGateway)
             .ProducesProblem(StatusCodes.Status504GatewayTimeout);
+        routes.MapGet("/discoveries/active", GetActiveDiscoveryAsync)
+            .WithName("GetActiveDiscovery")
+            .WithTags("Discoveries")
+            .Produces<DiscoveryJobStatusResponse>(StatusCodes.Status200OK);
+        routes.MapPost("/discoveries/{id:guid}/cancel", CancelDiscoveryAsync)
+            .WithName("CancelDiscovery")
+            .WithTags("Discoveries")
+            .Produces<DiscoveryCancellationResponse>(StatusCodes.Status202Accepted)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         routes.MapGet("/discoveries/{id:guid}", GetDiscoveryAsync)
             .WithName("GetDiscovery")
             .WithTags("Discoveries")
@@ -66,11 +76,80 @@ public static class DiscoveryEndpoints
             return ValidationError(context, "Укажите query или хотя бы один содержательный фильтр");
 
         var runQuery = JsonSerializer.SerializeToElement(new { query, filters }, JsonOptions);
+        var active = await db.DiscoveryRuns.AsNoTracking()
+            .Where(item => item.Status == "queued" || item.Status == "running")
+            .OrderBy(item => item.StartedAt).Select(item => new { item.Id, item.Status }).FirstOrDefaultAsync(cancellationToken);
+        if (active is not null) return ActiveConflict(active.Id, active.Status);
+
         var run = new DiscoveryRun(runQuery, DateTimeOffset.UtcNow);
         await db.DiscoveryRuns.AddAsync(run, cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            db.Entry(run).State = EntityState.Detached;
+            active = await db.DiscoveryRuns.AsNoTracking()
+                .Where(item => item.Status == "queued" || item.Status == "running")
+                .OrderBy(item => item.StartedAt).Select(item => new { item.Id, item.Status }).FirstOrDefaultAsync(cancellationToken);
+            if (active is null) throw;
+            return ActiveConflict(active.Id, active.Status);
+        }
         await queue.EnqueueAsync(run.Id);
         return Results.Accepted($"/api/v1/discoveries/{run.Id}", new DiscoveryJobAccepted(run.Id, run.Status));
+    }
+
+    private static async Task<IResult> GetActiveDiscoveryAsync(ApplicationDbContext db, CancellationToken cancellationToken)
+    {
+        var run = await db.DiscoveryRuns.AsNoTracking()
+            .Where(item => item.Status == "queued" || item.Status == "running")
+            .OrderBy(item => item.StartedAt).FirstOrDefaultAsync(cancellationToken);
+        return run is null ? Results.NoContent() : Results.Ok(ToStatusResponse(run));
+    }
+
+    private static async Task<IResult> CancelDiscoveryAsync(Guid id, HttpContext context, ApplicationDbContext db,
+        DiscoveryBackgroundWorker worker, CancellationToken cancellationToken)
+    {
+        var run = await db.DiscoveryRuns.SingleOrDefaultAsync(item => item.Id == id, cancellationToken);
+        if (run is null)
+            return ProblemResponses.Create(context, StatusCodes.Status404NotFound, "Поиск не найден", "NOT_FOUND");
+        if (run.Status is "queued" or "running")
+        {
+            var cancelledAt = DateTimeOffset.UtcNow;
+            if (run.Status == "queued")
+            {
+                var cancelledQueued = await db.DiscoveryRuns.Where(item => item.Id == id && item.Status == "queued")
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(item => item.Status, "cancelled")
+                        .SetProperty(item => item.Stage, "cancelled")
+                        .SetProperty(item => item.Outcome, "cancelled")
+                        .SetProperty(item => item.FinishedAt, cancelledAt), cancellationToken);
+                if (cancelledQueued > 0)
+                {
+                    worker.RequestCancellation(id);
+                    return Results.Accepted(value: new DiscoveryCancellationResponse(id, "cancelled"));
+                }
+                await db.Entry(run).ReloadAsync(cancellationToken);
+            }
+
+            if (run.Status == "running")
+            {
+                if (worker.RequestCancellation(id))
+                    return Results.Accepted(value: new DiscoveryCancellationResponse(id, "cancelling"));
+
+                var cancelledRunning = await db.DiscoveryRuns.Where(item => item.Id == id && item.Status == "running")
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(item => item.Status, "cancelled")
+                        .SetProperty(item => item.Stage, "cancelled")
+                        .SetProperty(item => item.Outcome, "cancelled")
+                        .SetProperty(item => item.FinishedAt, cancelledAt), cancellationToken);
+                if (cancelledRunning > 0)
+                    return Results.Accepted(value: new DiscoveryCancellationResponse(id, "cancelled"));
+                await db.Entry(run).ReloadAsync(cancellationToken);
+            }
+        }
+        return Results.Ok(new DiscoveryCancellationResponse(id, run.Status));
     }
 
     private static async Task<IResult> GetDiscoveryAsync(Guid id, HttpContext context, ApplicationDbContext db,
@@ -83,9 +162,25 @@ public static class DiscoveryEndpoints
         SupplierDiscoveryResponse? result = null;
         if (!string.IsNullOrWhiteSpace(run.ResultJson))
             result = JsonSerializer.Deserialize<SupplierDiscoveryResponse>(run.ResultJson, JsonOptions);
-        return Results.Ok(new DiscoveryJobStatusResponse(run.Id, run.Status, run.Stage,
-            run.CandidateCount, run.CompletedCandidates, run.AcceptedCount, run.FailedProfileCount, run.ErrorCode, result));
+        return Results.Ok(ToStatusResponse(run, result));
     }
+
+    private static DiscoveryJobStatusResponse ToStatusResponse(DiscoveryRun run, SupplierDiscoveryResponse? result = null)
+    {
+        if (result is null && !string.IsNullOrWhiteSpace(run.ResultJson))
+            result = JsonSerializer.Deserialize<SupplierDiscoveryResponse>(run.ResultJson, JsonOptions);
+        return new DiscoveryJobStatusResponse(run.Id, run.Status, run.Stage,
+            run.CandidateCount, run.CompletedCandidates, run.AcceptedCount, run.FailedProfileCount, run.ErrorCode, result);
+    }
+
+    private static IResult ActiveConflict(Guid id, string status) => Results.Conflict(new
+    {
+        title = "Поиск уже выполняется",
+        code = "DISCOVERY_ALREADY_RUNNING",
+        detail = "Дождитесь завершения текущего поиска или отмените его.",
+        discoveryId = id,
+        status
+    });
 
     private static bool TryBuildFilters(DiscoveryFiltersRequest? request,
         out SupplierDiscoveryFilters? filters, out string? error)

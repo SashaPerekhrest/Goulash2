@@ -90,4 +90,17 @@ public sealed class DiscoveryRun
         Stage = "failed";
         Status = "failed";
     }
+
+    public void Cancel(DateTimeOffset finishedAt)
+    {
+        if (Status is not ("queued" or "running")) return;
+        if (finishedAt.Offset != TimeSpan.Zero || finishedAt < StartedAt)
+            throw new ArgumentException("Finish time must be UTC and no earlier than its start time.", nameof(finishedAt));
+
+        FinishedAt = finishedAt;
+        ErrorCode = null;
+        Outcome = "cancelled";
+        Stage = "cancelled";
+        Status = "cancelled";
+    }
 }

@@ -69,7 +69,7 @@ public sealed record SupplierDiscoveryCandidate(string Name, string? WebsiteUrl,
     IReadOnlyList<SupplierObservedFact> Facts, IReadOnlyList<SupplierDiscoverySource> Sources);
 
 public sealed record SupplierDiscoveryResult(IReadOnlyList<SupplierDiscoveryCandidate> Candidates,
-    int FailedProfileCount, int SourcePageCount = 0, string Outcome = "complete", bool TimeLimitReached = false);
+    int FailedProfileCount, int SourcePageCount = 0, string Outcome = "complete");
 
 public enum ProviderFailureCode
 {

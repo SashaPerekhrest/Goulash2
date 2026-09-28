@@ -234,7 +234,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         var entity = modelBuilder.Entity<DiscoveryRun>();
         entity.ToTable("discovery_runs", table =>
         {
-            table.HasCheckConstraint("ck_discovery_runs_status", "status IN ('queued', 'running', 'succeeded', 'failed')");
+            table.HasCheckConstraint("ck_discovery_runs_status", "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')");
             table.HasCheckConstraint("ck_discovery_runs_counts", "accepted_count >= 0 AND failed_profile_count >= 0");
         });
         entity.HasKey(item => item.Id);
@@ -277,9 +277,9 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         entity.Property(item => item.Prompt).HasColumnName("prompt").HasColumnType("text").IsRequired();
         entity.Property(item => item.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone");
         entity.HasData(
-            new AiProviderPromptSetting("perplexity", AiProviderPromptDefaults.Perplexity,
+            new AiProviderPromptSetting("perplexity", AiProviderPromptDefaults.Perplexity.Replace("\r\n", "\n", StringComparison.Ordinal),
                 new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)),
-            new AiProviderPromptSetting("polza", AiProviderPromptDefaults.Polza,
+            new AiProviderPromptSetting("polza", AiProviderPromptDefaults.Polza.Replace("\r\n", "\n", StringComparison.Ordinal),
                 new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)));
     }
 

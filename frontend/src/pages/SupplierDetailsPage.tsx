@@ -8,7 +8,7 @@ import {
   type SupplierDetails,
   type SupplierSourcedValue,
 } from '../shared/api/apiClient'
-import { SourcedField, Source, formatDate } from '../shared/SourcedField'
+import { SourcedField, Source } from '../shared/SourcedField'
 import { Card, ErrorNotice, PageLoading, SafeExternalLink } from '../shared/ui'
 
 type SupplierDetailsLocationState = { from?: string }
@@ -92,7 +92,6 @@ export function SupplierDetailsPage() {
           <div>
             <span className="eyebrow">ПОСТАВЩИК</span>
             <h1>{details.name.value ?? 'Название не указано'}</h1>
-            <p className="details-date">Собрано: {formatDate(details.lastDiscoveredAt)} · Обновлено: {formatDate(details.updatedAt)}</p>
           </div>
           <button className={details.isFavorite ? 'favorite-button selected details-favorite' : 'favorite-button details-favorite'}
             type="button" aria-pressed={details.isFavorite} disabled={favoritePending} onClick={() => void toggleFavorite()}>
@@ -109,29 +108,39 @@ export function SupplierDetailsPage() {
           <SourcedField label="Адрес" field={details.address} />
           <SourcedField label="Город" field={details.city} />
           <SourcedField label="Регион" field={details.region} />
-          <SourcedCollection title="Регионы работы" values={details.serviceRegions} />
+          <SourcedCollection title="Регионы работы" values={details.serviceRegions} className="service-regions-collection" />
         </Card>
 
         <Card className="details-section">
           <h2>Контакты</h2>
           <SourcedField label="Сайт" field={details.contacts.website}
             render={(value) => <SafeExternalLink className="safe-external-link" href={value}>{value}</SafeExternalLink>} />
-          <SourcedCollection title="Телефоны" values={details.contacts.phones} />
-          <SourcedCollection title="Электронная почта" values={details.contacts.emails} />
+          <SourcedCollection title="Телефоны" values={details.contacts.phones} className="details-contact-collection" />
+          <SourcedCollection title="Электронная почта" values={details.contacts.emails} className="details-contact-collection" />
         </Card>
 
         <Card className="details-section">
           <h2>Товары и цены</h2>
-          {details.products.length === 0 ? <p className="details-missing">Нет данных</p> : details.products.map((product, index) => (
-            <div className="details-product" key={`${product.name.value ?? 'product'}-${index}`}>
-              <SourcedField label="Товар" field={product.name} />
-              <SourcedField label="Категория" field={product.category} />
-              {product.prices.length === 0 ? <p className="details-missing">Цена: нет данных</p> : product.prices.map((price, priceIndex) => (
-                <SourcedField key={priceIndex} label="Цена" field={price.evidence}
-                  render={(value, isAlternative) => isAlternative ? value : <>{price.amountMin === price.amountMax ? price.amountMin : `${price.amountMin}–${price.amountMax}`} {price.currency}/{price.unit}{price.isApproximate && ' · ориентировочно'}</>} />
-              ))}
-            </div>
-          ))}
+          {details.products.length === 0 ? <p className="details-missing">Нет данных</p> : <div className="details-table-wrap">
+            <table className="details-product-table">
+              <thead><tr><th>Товар</th><th>Категория</th><th>Цена</th></tr></thead>
+              <tbody>{details.products.flatMap((product, index) => product.prices.length === 0
+                ? [<tr key={`${product.name.value ?? 'product'}-${index}`}>
+                    <td><SourcedField field={product.name} /></td>
+                    <td><SourcedField field={product.category} /></td>
+                    <td><span className="details-missing">Нет данных</span></td>
+                  </tr>]
+                : product.prices.map((price, priceIndex) => <tr key={`${product.name.value ?? 'product'}-${index}-${priceIndex}`}>
+                    <td><SourcedField field={product.name} /></td>
+                    <td><SourcedField field={product.category} /></td>
+                    <td><div className="details-field"><span className="details-field-value">
+                      {price.amountMin === price.amountMax ? price.amountMin : `${price.amountMin}–${price.amountMax}`} {price.currency}/{price.unit}{price.isApproximate && ' · ориентировочно'}
+                    </span>{price.evidence.sources.length > 0 && <ul className="details-source-list">
+                      {price.evidence.sources.map((source, sourceIndex) => <li key={`${source.url}-${sourceIndex}`}><Source source={source} /></li>)}
+                    </ul>}</div></td>
+                  </tr>))}</tbody>
+            </table>
+          </div>}
         </Card>
 
         <Card className="details-section">
@@ -172,12 +181,13 @@ export function SupplierDetailsPage() {
   )
 }
 
-function SourcedCollection({ title, values, render }: {
+function SourcedCollection({ title, values, render, className = '' }: {
   title: string
   values: SupplierSourcedValue<string>[]
   render?: (value: string) => ReactNode
+  className?: string
 }) {
-  return <div className="details-collection">
+  return <div className={`details-collection ${className}`}>
     <h3>{title}</h3>
     {values.length === 0 ? <p className="details-missing">Нет данных</p> : values.map((value, index) =>
       <SourcedField key={index} field={value} render={render} />)}

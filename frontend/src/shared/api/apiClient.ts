@@ -151,6 +151,8 @@ export type AiProvider = {
   supportsProviderRouting: boolean
   basePrompt: string
   defaultBasePrompt: string
+  profilePrompt: string
+  defaultProfilePrompt: string
 }
 export type AiProvidersResponse = { items: AiProvider[] }
 export type AiSettings = {
@@ -158,6 +160,7 @@ export type AiSettings = {
   model: string | null
   routeProvider: string | null
   basePrompt: string | null
+  profilePrompt: string | null
   hasApiKey: boolean
   apiKeyMask: string | null
   updatedAt: string | null
@@ -167,6 +170,7 @@ export type AiSettingsUpdate = {
   model: string
   routeProvider?: string
   basePrompt?: string
+  profilePrompt?: string
   apiKey?: string
 }
 export type AiSettingsCheck = {
@@ -213,13 +217,12 @@ export type DiscoverySearchResponse = {
   updatedExistingCount: number
   outcome: 'complete' | 'partial' | 'no_candidates' | 'profiles_failed'
   sourcePageCount: number
-  timeLimitReached: boolean
 }
 
 export type DiscoveryJobAccepted = { discoveryId: string; status: 'queued' }
 export type DiscoveryJobStatus = {
   discoveryId: string
-  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   stage: string
   candidateCount: number
   completedCandidates: number
@@ -367,16 +370,26 @@ export async function discoverSuppliers(request: DiscoverySearchRequest, signal?
 
 export async function getDiscoveryStatus(id: string, signal?: AbortSignal) {
   const response = await apiClient.get<unknown>(`/discoveries/${encodeURIComponent(id)}`, signal)
-  if (!isRecord(response) || response.discoveryId !== id ||
-    !['queued', 'running', 'succeeded', 'failed'].includes(response.status as string) ||
-    typeof response.stage !== 'string' || !isNonNegativeInteger(response.candidateCount) ||
-    !isNonNegativeInteger(response.completedCandidates) ||
-    !isNonNegativeInteger(response.acceptedCount) || !isNonNegativeInteger(response.failedProfileCount) ||
-    !(response.errorCode === null || typeof response.errorCode === 'string') ||
-    !(response.result === null || isDiscoverySearchResponse(response.result))) {
+  if (!isDiscoveryJobStatus(response, id)) throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  return response as DiscoveryJobStatus
+}
+
+export async function getActiveDiscovery(signal?: AbortSignal) {
+  const response = await apiClient.get<unknown>('/discoveries/active', signal)
+  if (response === undefined || response === null) return null
+  if (!isRecord(response) || typeof response.discoveryId !== 'string' ||
+    !isDiscoveryJobStatus(response, response.discoveryId)) {
     throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
   }
   return response as DiscoveryJobStatus
+}
+
+export async function cancelDiscovery(id: string) {
+  const response = await apiClient.post<unknown>(`/discoveries/${encodeURIComponent(id)}/cancel`)
+  if (!isRecord(response) || response.discoveryId !== id || typeof response.status !== 'string') {
+    throw new ApiError('Сервер вернул некорректный ответ', 502, 'INVALID_RESPONSE')
+  }
+  return response as { discoveryId: string; status: string }
 }
 
 export async function setSupplierFavorite(id: string, isFavorite: boolean) {
@@ -409,6 +422,20 @@ export function getSupplierDetails(id: string, signal?: AbortSignal) {
   return apiClient.get<SupplierDetails>(`/suppliers/${encodeURIComponent(id)}`, signal)
 }
 
+export function deleteSupplier(id: string) {
+  return apiClient.delete<void>(`/suppliers/${encodeURIComponent(id)}`)
+}
+
+function isDiscoveryJobStatus(value: unknown, expectedId: string): value is DiscoveryJobStatus {
+  return isRecord(value) && value.discoveryId === expectedId &&
+    ['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(value.status as string) &&
+    typeof value.stage === 'string' && isNonNegativeInteger(value.candidateCount) &&
+    isNonNegativeInteger(value.completedCandidates) && isNonNegativeInteger(value.acceptedCount) &&
+    isNonNegativeInteger(value.failedProfileCount) &&
+    (value.errorCode === null || typeof value.errorCode === 'string') &&
+    (value.result === null || isDiscoverySearchResponse(value.result))
+}
+
 function isDiscoverySearchResponse(value: unknown): value is DiscoverySearchResponse {
   if (!isRecord(value) || typeof value.discoveryId !== 'string' || !value.discoveryId ||
     !Array.isArray(value.items) || value.items.length > 20 ||
@@ -416,7 +443,7 @@ function isDiscoverySearchResponse(value: unknown): value is DiscoverySearchResp
     !isNonNegativeInteger(value.failedProfileCount) || !isNonNegativeInteger(value.updatedExistingCount) ||
     value.updatedExistingCount > value.acceptedCount ||
     !['complete', 'partial', 'no_candidates', 'profiles_failed'].includes(value.outcome as string) ||
-    !isNonNegativeInteger(value.sourcePageCount) || typeof value.timeLimitReached !== 'boolean') return false
+    !isNonNegativeInteger(value.sourcePageCount)) return false
 
   return value.items.every((item) => isRecord(item) &&
     typeof item.id === 'string' && item.id.length > 0 &&

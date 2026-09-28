@@ -48,7 +48,9 @@
 {
   "items": [
     { "id": "perplexity", "displayName": "Perplexity", "supportsWebSearch": true,
-      "models": ["sonar", "sonar-pro", "sonar-deep-research", "sonar-reasoning-pro"] }
+      "models": ["sonar", "sonar-pro", "sonar-deep-research", "sonar-reasoning-pro"],
+      "basePrompt": "...", "defaultBasePrompt": "...",
+      "profilePrompt": "...", "defaultProfilePrompt": "..." }
   ]
 }
 ```
@@ -67,6 +69,9 @@
 {
   "providerId": "provider-id",
   "model": "model-id",
+  "routeProvider": null,
+  "basePrompt": "...",
+  "profilePrompt": "...",
   "hasApiKey": true,
   "apiKeyMask": "••••1234",
   "updatedAt": "2026-09-26T10:00:00Z"
@@ -81,11 +86,13 @@
 {
   "providerId": "provider-id",
   "model": "model-id",
-  "apiKey": "new-secret"
+  "apiKey": "new-secret",
+  "basePrompt": "Instructions for both search stages",
+  "profilePrompt": "Profile extraction template"
 }
 ```
 
-Ответ `200` в форме `GET /ai/settings`. `apiKey` можно опустить для сохранения прежнего ключа **только при неизменном `providerId` и наличии ранее сохранённого ключа**. При смене провайдера или после удаления ключа новый ключ обязателен (`409 API_KEY_REQUIRED`). Пустая строка недопустима. Неизвестный или не поддерживающий веб-поиск адаптер отклоняется (`400 UNSUPPORTED_PROVIDER`). Ключ шифруется AES-256-GCM с Base64 32-байтовым секретом окружения `AI_ENCRYPTION_KEY` (`Ai:EncryptionKey`) до записи в базу.
+Ответ `200` в форме `GET /ai/settings`. `basePrompt` применяется к обоим этапам; `profilePrompt` задаёт редактируемый пользовательский запрос для извлечения профиля на втором этапе. В `profilePrompt` доступны шаблоны `{{supplierName}}`, `{{websiteUrl}}` и `{{websitePages}}`; сервер подставляет данные поставщика и загруженные страницы. Оба промпта ограничены 8000 символами. `apiKey` можно опустить для сохранения прежнего ключа **только при неизменном `providerId` и наличии ранее сохранённого ключа**. При смене провайдера или после удаления ключа новый ключ обязателен (`409 API_KEY_REQUIRED`). Пустая строка недопустима. Неизвестный или не поддерживающий веб-поиск адаптер отклоняется (`400 UNSUPPORTED_PROVIDER`). Ключ шифруется AES-256-GCM с Base64 32-байтовым секретом окружения `AI_ENCRYPTION_KEY` (`Ai:EncryptionKey`) до записи в базу.
 
 ### `DELETE /ai/settings/key`
 

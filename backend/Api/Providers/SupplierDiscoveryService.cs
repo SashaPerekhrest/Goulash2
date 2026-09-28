@@ -17,8 +17,14 @@ public sealed class SupplierDiscoveryService(
     private const int MaxAttemptsPerRequest = 5;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<SupplierDiscoveryResult> DiscoverAsync(IAiSearchTransport transport, string model,
+    public Task<SupplierDiscoveryResult> DiscoverAsync(IAiSearchTransport transport, string model,
         string apiKey, string? routeProvider, string basePrompt, string query, SupplierDiscoveryFilters filters,
+        int limit, CancellationToken token, Func<SupplierDiscoveryProgress, Task>? progress = null) =>
+        DiscoverAsync(transport, model, apiKey, routeProvider, basePrompt, AiProviderPromptDefaults.Profile,
+            query, filters, limit, token, progress);
+
+    public async Task<SupplierDiscoveryResult> DiscoverAsync(IAiSearchTransport transport, string model,
+        string apiKey, string? routeProvider, string basePrompt, string profilePrompt, string query, SupplierDiscoveryFilters filters,
         int limit, CancellationToken token, Func<SupplierDiscoveryProgress, Task>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(filters);
@@ -43,9 +49,7 @@ public sealed class SupplierDiscoveryService(
         var candidates = new ConcurrentDictionary<int, SupplierDiscoveryCandidate>();
         var failed = 0;
         var completed = 0;
-        var completedProfiles = 0;
         var sourcePageCount = 0;
-        var timeLimitReached = false;
         try
         {
             await Parallel.ForEachAsync(leads.Select((lead, index) => (lead, index)),
@@ -55,10 +59,9 @@ public sealed class SupplierDiscoveryService(
                 try
                 {
                     var candidate = await RetryAsync(profileToken => BuildProfileAsync(transport, model, apiKey, routeProvider,
-                        entry.lead, basePrompt, profileToken), transport.Id, "supplier profile", cancellationToken);
+                        entry.lead, basePrompt, profilePrompt, profileToken), transport.Id, "supplier profile", cancellationToken);
                     candidates[entry.index] = candidate.Candidate;
                     Interlocked.Add(ref sourcePageCount, candidate.SourcePageCount);
-                    Interlocked.Increment(ref completedProfiles);
                 }
                 catch (AiProviderException exception)
                 {
@@ -92,26 +95,19 @@ public sealed class SupplierDiscoveryService(
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            // The worker supplies a two-minute deadline through this token. Keep the
-            // completed profiles and turn every remaining lead into a minimal result.
-            timeLimitReached = true;
-            foreach (var entry in leads.Select((lead, index) => (lead, index)))
-                AddLeadFallback(entry.index, entry.lead, candidates);
-            failed = Math.Max(failed, leads.Count - Volatile.Read(ref completedProfiles));
+            throw;
         }
 
         var ordered = candidates.OrderBy(item => item.Key).Select(item => item.Value).ToArray();
-        var outcome = timeLimitReached
-            ? "partial"
-            : ordered.Length == 0
+        var outcome = ordered.Length == 0
             ? failed > 0 ? "profiles_failed" : "no_candidates"
             : failed > 0 ? "partial" : "complete";
-        return new SupplierDiscoveryResult(ordered, failed, sourcePageCount, outcome, timeLimitReached);
+        return new SupplierDiscoveryResult(ordered, failed, sourcePageCount, outcome);
     }
 
     private async Task<(SupplierDiscoveryCandidate Candidate, int SourcePageCount)> BuildProfileAsync(
         IAiSearchTransport transport, string model, string apiKey, string? routeProvider, SupplierLead lead,
-        string basePrompt, CancellationToken token)
+        string basePrompt, string profilePrompt, CancellationToken token)
     {
         var pages = await siteResearcher.ReadAsync(lead.WebsiteUrl, token);
         var siteText = string.Join("\n\n", pages.Select(page =>
@@ -119,7 +115,7 @@ public sealed class SupplierDiscoveryService(
         var siteDomain = TryGetPublicDomain(lead.WebsiteUrl);
         var response = await transport.SearchAsync(model, apiKey, routeProvider,
             BuildStagePrompt(basePrompt, "Extract one complete structured profile from the supplied supplier website pages and live web search."),
-            BuildProfilePrompt(lead, siteText),
+            BuildProfilePrompt(profilePrompt, lead, siteText),
             lead.Name ?? string.Empty,
             token, SupplierDiscoveryJson.BuildProfileSchema(), siteDomain is null ? null : [siteDomain]);
         EnsureComplete(response.FinishReason, "profile_incomplete");
@@ -271,23 +267,10 @@ public sealed class SupplierDiscoveryService(
         facts, prices, contacts, or explanations at this stage. Return a JSON object with the suppliers array.
         """;
 
-    private static string BuildProfilePrompt(SupplierLead lead, string siteText) => $$"""
-        Build one complete JSON profile for this supplier using its site pages below.
-        Supplier: {{JsonSerializer.Serialize(lead.Name)}}
-        Website: {{JsonSerializer.Serialize(lead.WebsiteUrl)}}
-
-        Extract all available description, address, city, region, service regions, contact phones and emails, website,
-        products and categories with their prices, delivery terms and days, minimum order, certificates and image URLs.
-        Keep each product's prices inside that product. Return price amount, amountMin and amountMax as strings or null,
-        plus currency, unit, isApproximate and originalText (the wording found on the page). For minimumOrder, return
-        an object with amount, unit and the original condition in details when available; use null for unavailable fields.
-        Return delivery.maxDays as a number or null.
-        Return null or an empty array only for information that is unavailable. Do not discard a supplier because fields are missing.
-        If no website pages were supplied, use live web search for this named supplier and its public site.
-
-        WEBSITE PAGES:
-        {{siteText}}
-        """;
+    private static string BuildProfilePrompt(string template, SupplierLead lead, string siteText) =>
+        template.Replace("{{supplierName}}", JsonSerializer.Serialize(lead.Name), StringComparison.Ordinal)
+            .Replace("{{websiteUrl}}", JsonSerializer.Serialize(lead.WebsiteUrl), StringComparison.Ordinal)
+            .Replace("{{websitePages}}", siteText, StringComparison.Ordinal);
 
     private static string BuildLeadSearchQuery(string query, SupplierDiscoveryFilters filters)
     {
