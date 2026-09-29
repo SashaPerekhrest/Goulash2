@@ -21,7 +21,7 @@ services:
     image: ghcr.io/${GHCR_OWNER:?GHCR_OWNER is required}/goulash2-api:${IMAGE_TAG:?IMAGE_TAG is required}
     restart: unless-stopped
     environment:
-      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       ASPNETCORE_URLS: http://+:8080
       Admin__InitialPassword: ${ADMIN_INITIAL_PASSWORD:?ADMIN_INITIAL_PASSWORD is required}
       Ai__EncryptionKey: ${AI_ENCRYPTION_KEY:?AI_ENCRYPTION_KEY is required}

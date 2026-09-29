@@ -18,6 +18,7 @@ sudo install -d -o DEPLOY_USER -g DEPLOY_USER -m 750 /opt/goulash2
 GHCR_OWNER=sashaperekhrest
 IMAGE_TAG=latest
 FRONTEND_PORT=3001
+ASPNETCORE_ENVIRONMENT=Production
 POSTGRES_DB=goulash2
 POSTGRES_USER=goulash2
 POSTGRES_PASSWORD=replace-with-long-random-password
@@ -26,6 +27,8 @@ AI_ENCRYPTION_KEY=replace-with-output-of-openssl-rand-base64-32
 ```
 
 Сгенерируйте отдельные случайные значения на сервере, например `openssl rand -hex 32` для пароля БД, `openssl rand -hex 24` для пароля администратора и `openssl rand -base64 32` для мастер-ключа. `AI_ENCRYPTION_KEY` должен декодироваться ровно в 32 байта. Храните резервную копию мастер-ключа вне сервера: замена без переноса уже зашифрованного ключа AI-провайдера сделает его нечитаемым. Значение `IMAGE_TAG` в `.env` нужно для ручных команд; workflow при деплое переопределяет его конкретным SHA.
+
+`ASPNETCORE_ENVIRONMENT` оставляйте `Production` для HTTPS. Для временной диагностики по HTTP можно установить `Development`: в этом режиме приложение принимает HTTP и помечает auth/CSRF cookies как `Secure` только при HTTPS-запросе. По HTTP cookies идут без шифрования; не вводите пароль и не используйте AI-настройки через публичный интернет в этом режиме. Как только HTTPS доступен, верните `Production` и пересоздайте API.
 
 ```sh
 chmod 600 /opt/goulash2/.env
