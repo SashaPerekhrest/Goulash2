@@ -63,8 +63,8 @@ export function ComparisonPage() {
     </div>
     <div className="comparison-scroll" role="table" aria-label="Сравнение поставщиков">
       <div className="comparison-grid" style={{
-        gridTemplateColumns: `minmax(140px, .65fr) repeat(${supplierIds.length}, minmax(230px, 1fr))`,
-        minWidth: `${140 + supplierIds.length * 230}px`,
+        gridTemplateColumns: `150px repeat(${supplierIds.length}, minmax(600px, 1fr))`,
+        minWidth: `${150 + supplierIds.length * 600}px`,
       }}>
         <div className="comparison-row" role="row">
           <div className="comparison-label comparison-header-label" role="columnheader">Параметр</div>
