@@ -79,9 +79,6 @@ export function ComparisonPage() {
           })}
         </div>
 
-        <ComparisonRow label="Название">
-          {supplierIds.map((id) => <SupplierCell key={id} entry={suppliers[id]}>{(details) => details.name.value || 'Нет данных'}</SupplierCell>)}
-        </ComparisonRow>
         <ComparisonRow label="Сайт и контакты">
           {supplierIds.map((id) => <SupplierCell key={id} entry={suppliers[id]}>{(details) => <div className="comparison-contact-list">
             <FieldLine label="Сайт">{details.contacts.website.value
