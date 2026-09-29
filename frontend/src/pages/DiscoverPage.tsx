@@ -14,6 +14,7 @@ import {
   type DiscoverySearchResponse,
 } from '../shared/api/apiClient'
 import { Card, EmptyState, ErrorNotice, FormField, LoadingIndicator, PageLoading, SafeExternalLink } from '../shared/ui'
+import { useComparison } from '../shared/comparison/ComparisonContext'
 import { compareDecimals, normalizeDecimal } from './discoveryDecimal'
 
 type DiscoveryForm = {
@@ -60,6 +61,7 @@ const initialForm: DiscoveryForm = {
 }
 
 export function DiscoverPage() {
+  const comparison = useComparison()
   const location = useLocation()
   const [form, setForm] = useState(initialForm)
   const formRef = useRef(initialForm)
@@ -280,6 +282,7 @@ export function DiscoverPage() {
     setDeletePending((current) => new Set(current).add(id))
     try {
       await deleteSupplier(id)
+      comparison.removeSupplier(id)
       setResponse((current) => current ? {
         ...current,
         items: current.items.filter((item) => item.id !== id),
@@ -571,6 +574,11 @@ export function DiscoverPage() {
                     >
                       <span aria-hidden="true">{item.isFavorite ? '★' : '☆'}</span>
                       <span>{item.isFavorite ? 'В избранном' : 'В избранное'}</span>
+                    </button>
+                    <button className={comparison.hasSupplier(item.id) ? 'button secondary comparison-button selected' : 'button secondary comparison-button'} type="button"
+                      aria-pressed={comparison.hasSupplier(item.id)}
+                      onClick={() => comparison.hasSupplier(item.id) ? comparison.removeSupplier(item.id) : comparison.addSupplier(item.id)}>
+                      {comparison.hasSupplier(item.id) ? 'Убрать из сравнения' : 'Сравнить'}
                     </button>
                     <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>Подробнее</Link>
                     <button className="button danger-quiet" type="button" disabled={deletePending.has(item.id)}

@@ -25,6 +25,7 @@ a { color: inherit; text-decoration: none; }
 .nav-link:hover, .nav-link.active { background: #254b3e; color: #fff; }
 .nav-dot { width: 6px; height: 6px; border: 1px solid #8daa9a; border-radius: 50%; }
 .nav-link.active .nav-dot { border-color: #e6b86f; background: #e6b86f; }
+.nav-count { display: inline-grid; min-width: 20px; height: 20px; margin-left: auto; padding: 0 5px; place-items: center; border-radius: 999px; background: #e6b86f; color: #18392f; font-size: 10px; font-weight: 800; }
 .sidebar-footer { display: flex; align-items: center; gap: 9px; margin-top: auto; padding: 15px 14px 4px; color: #93aa9d; font-size: 11px; }
 .status-pip { width: 7px; height: 7px; border-radius: 50%; background: #a5d59a; box-shadow: 0 0 0 4px #a5d59a20; }
 .main-area { min-height: 100vh; margin-left: 264px; }
@@ -255,6 +256,32 @@ h1 { max-width: 720px; margin: 0; font: 700 clamp(30px, 4vw, 45px)/1.12 system-u
 .supplier-note-card .form-field > label { color: #35473d; font-size: 12px; font-weight: 700; }
 .supplier-note-input { min-height: 120px; padding: 11px 12px; resize: vertical; line-height: 1.5; }
 .note-actions { display: flex; align-items: center; gap: 9px; }
+.comparison-page { max-width: 1700px; }
+.comparison-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 28px; }
+.comparison-heading .eyebrow { margin-bottom: 10px; }
+.comparison-count { padding: 7px 10px; border-radius: 6px; background: #eaf2e9; color: #52705c; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.comparison-empty-card { margin-top: 34px; }
+.comparison-scroll { overflow-x: auto; border-radius: 12px; scrollbar-color: #b7c9b8 #edf2ec; }
+.comparison-grid { display: grid; align-items: stretch; overflow: hidden; border: 1px solid #dfe6dc; border-radius: 12px; background: #fff; }
+.comparison-row { display: contents; }
+.comparison-label, .comparison-vendor-header, .comparison-cell { min-width: 0; padding: 15px; border-right: 1px solid #e7ece5; border-bottom: 1px solid #e7ece5; }
+.comparison-label { position: sticky; left: 0; z-index: 1; background: #f5f8f3; color: #52695a; font-size: 11px; font-weight: 750; }
+.comparison-header-label { display: flex; align-items: center; background: #edf3eb; }
+.comparison-vendor-header { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-height: 65px; padding-right: 42px; background: #edf3eb; }
+.comparison-vendor-name { color: #253a2f; font-size: 14px; font-weight: 750; line-height: 1.4; overflow-wrap: anywhere; }
+.comparison-remove { position: absolute; top: 10px; right: 10px; display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid #e3c9c2; border-radius: 7px; background: #fff8f5; color: #a34c3b; font-size: 22px; line-height: 1; cursor: pointer; }
+.comparison-remove:hover { background: #fbeae4; }
+.comparison-cell { color: #43564a; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.comparison-cell-error { color: #a34c3b; }
+.comparison-contact-list, .comparison-compact-list { display: grid; gap: 8px; }
+.comparison-field-line { display: grid; gap: 2px; }
+.comparison-field-line > span { color: #849087; font-size: 10px; font-weight: 650; }
+.comparison-list { display: grid; gap: 5px; margin: 0; padding-left: 17px; }
+.comparison-note-field { display: grid; gap: 7px; }
+.comparison-note-field textarea { width: 100%; min-height: 84px; padding: 9px 10px; border: 1px solid #d8e0d7; border-radius: 7px; outline: none; background: #fcfdfb; color: #25372d; font: 12px/1.5 system-ui, sans-serif; resize: vertical; }
+.comparison-note-field textarea:focus { border-color: #7ba087; box-shadow: 0 0 0 3px #6e9a771a; }
+.comparison-note-field > span, .comparison-unavailable-hint { color: #879188; font-size: 10px; }
+.comparison-unavailable-hint { margin: 14px 0 0; }
 
 @media (max-width: 920px) {
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
@@ -316,4 +343,5 @@ h1 { max-width: 720px; margin: 0; font: 700 clamp(30px, 4vw, 45px)/1.12 system-u
   .catalog-results-heading { align-items: flex-start; flex-direction: column; }
   .catalog-pagination { justify-content: flex-start; }
   .catalog-pagination span { order: -1; width: 100%; padding: 2px 0 5px; }
+  .comparison-heading { align-items: flex-start; flex-direction: column; }
 }

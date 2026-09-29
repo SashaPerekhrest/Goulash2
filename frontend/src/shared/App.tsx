@@ -8,11 +8,12 @@ import { DiscoverPage } from '../pages/DiscoverPage'
 import { IntegrationSettingsPage } from '../pages/IntegrationSettingsPage'
 import { LoginPage } from '../pages/LoginPage'
 import { ErrorNotice } from './ui'
+import { useComparison } from './comparison/ComparisonContext'
+import { ComparisonPage } from '../pages/ComparisonPage'
 
 const navItems = [
   { to: '/discover', label: 'Найти поставщиков' },
   { to: '/suppliers', label: 'База поставщиков' },
-  { to: '/settings/integration', label: 'Настройки интеграции' },
 ]
 
 export function App() {
@@ -24,6 +25,7 @@ export function App() {
         <Route path="discover" element={<DiscoverPage />} />
         <Route path="suppliers" element={<SuppliersPage />} />
         <Route path="suppliers/:id" element={<SupplierDetailsPage />} />
+        <Route path="compare" element={<ComparisonPage />} />
         <Route path="settings/integration" element={<IntegrationSettingsPage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
@@ -33,6 +35,7 @@ export function App() {
 
 function AppShell() {
   const auth = useAuth()
+  const { supplierIds } = useComparison()
   const [loggingOut, setLoggingOut] = useState(false)
   const [logoutError, setLogoutError] = useState(false)
 
@@ -68,6 +71,15 @@ function AppShell() {
               {label}
             </NavLink>
           ))}
+          <NavLink to="/compare" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-dot" aria-hidden="true" />
+            <span>Сравнение</span>
+            {supplierIds.length > 0 && <span className="nav-count" aria-label={`${supplierIds.length} в сравнении`}>{supplierIds.length}</span>}
+          </NavLink>
+          <NavLink to="/settings/integration" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-dot" aria-hidden="true" />
+            Настройки интеграции
+          </NavLink>
         </nav>
         <div className="sidebar-footer">
           <span className="status-pip" />

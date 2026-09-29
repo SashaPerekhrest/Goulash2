@@ -8,6 +8,7 @@ import {
   type SupplierCatalogPage,
 } from '../shared/api/apiClient'
 import { Card, EmptyState, ErrorNotice, FormField, LoadingIndicator, PageLoading, SafeExternalLink } from '../shared/ui'
+import { useComparison } from '../shared/comparison/ComparisonContext'
 
 const filterKeys = [
   'q', 'city', 'region', 'category', 'product', 'priceMin', 'priceMax', 'currency', 'unit',
@@ -20,6 +21,7 @@ const substantiveFilterKeys = [
 ]
 
 export function SuppliersPage() {
+  const comparison = useComparison()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const searchKey = searchParams.toString()
@@ -125,6 +127,7 @@ export function SuppliersPage() {
     setError(null)
     try {
       await deleteSupplier(id)
+      comparison.removeSupplier(id)
       setRevision((value) => value + 1)
     } catch (cause) {
       setError(cause instanceof ApiError && cause.status === 404
@@ -280,6 +283,11 @@ export function SuppliersPage() {
                 onClick={() => void toggleFavorite(item.id, item.isFavorite)}>
                 <span aria-hidden="true">{item.isFavorite ? '★' : '☆'}</span>
                 <span>{favoritePending.has(item.id) ? 'Сохраняем…' : item.isFavorite ? 'В избранном' : 'В избранное'}</span>
+              </button>
+              <button className={comparison.hasSupplier(item.id) ? 'button secondary comparison-button selected' : 'button secondary comparison-button'} type="button"
+                aria-pressed={comparison.hasSupplier(item.id)}
+                onClick={() => comparison.hasSupplier(item.id) ? comparison.removeSupplier(item.id) : comparison.addSupplier(item.id)}>
+                {comparison.hasSupplier(item.id) ? 'Убрать из сравнения' : 'Сравнить'}
               </button>
               <Link className="button quiet discovery-details-link" to={`/suppliers/${encodeURIComponent(item.id)}`} state={{ from: `${location.pathname}${location.search}` }}>Подробнее</Link>
               <button className="button danger-quiet" type="button" disabled={deletePending.has(item.id)}
