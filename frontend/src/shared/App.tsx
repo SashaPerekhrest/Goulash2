@@ -57,8 +57,8 @@ function AppShell() {
     <div className="app-shell">
       <aside className="sidebar">
         <NavLink className="brand" to="/discover" aria-label="На главную">
-          <span className="brand-mark">Г</span>
-          <span>гуляш<span className="brand-period">.</span></span>
+          <img className="brand-logo" src="/diet-icon.png" alt="" />
+          <span>Фуд сервис</span>
         </NavLink>
         <p className="sidebar-caption">FOOD SUPPLY DESK</p>
         <nav className="main-nav" aria-label="Основная навигация">

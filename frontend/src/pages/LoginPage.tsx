@@ -44,7 +44,10 @@ export function LoginPage() {
   return (
     <section className="login-layout">
       <div className="login-aside">
-        <span className="brand-mark login-brand-mark">Г</span>
+        <div className="login-brand">
+          <img className="login-brand-logo" src="/diet-icon.png" alt="" />
+          <span>Фуд сервис</span>
+        </div>
         <p className="eyebrow">FOOD SUPPLY DESK</p>
         <p className="login-aside-copy">Источники, условия и контакты поставщиков — в одном рабочем пространстве.</p>
       </div>
